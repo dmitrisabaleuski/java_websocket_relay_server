@@ -107,14 +107,13 @@ public class RelayWebSocketServer extends WebSocketServer {
             }
         }
 
-        if (senderToken != null) {
-            Set<WebSocket> conns = clients.get(senderToken);
-            for (WebSocket client : conns) {
+        clients.values().forEach(set -> {
+            set.forEach(client -> {
                 if (!client.equals(conn)) {
                     client.send(message);
                 }
-            }
-        }
+            });
+        });
     }
 
     @Override
