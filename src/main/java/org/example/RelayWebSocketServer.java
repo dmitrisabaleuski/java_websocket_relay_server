@@ -4,7 +4,11 @@ import org.java_websocket.server.WebSocketServer;
 import org.java_websocket.WebSocket;
 import org.java_websocket.handshake.ClientHandshake;
 
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.nio.ByteBuffer;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -28,29 +32,29 @@ public class RelayWebSocketServer extends WebSocketServer {
     }
 
     @Override
-    public void onMessage(WebSocket conn, String message) {
-        System.out.println("Message: " + message);
-        if (message.startsWith("TOKEN:")) {
-            String token = message.substring(6);
-            clients.put(token, conn);
-            conn.send("REGISTERED:" + token);
-        } else if (message.startsWith("SEND:")) {
-            String[] parts = message.split(":", 3);
-            if (parts.length == 3) {
-                String targetToken = parts[1];
-                String payload = parts[2];
-                WebSocket target = clients.get(targetToken);
-                if (target != null) {
-                    target.send("RECEIVED:" + payload);
-                    conn.send("DELIVERED");
-                } else {
-                    conn.send("ERROR:Target not connected");
-                }
-            } else {
-                conn.send("ERROR:Invalid SEND format");
-            }
-        } else {
-            conn.send("ERROR:Unknown command");
+    public void onMessage(WebSocket webSocket, String message) {
+        System.out.println("Получено текстовое сообщение (игнорируется): " + message);
+    }
+
+    @Override
+    public void onMessage(WebSocket conn, ByteBuffer message) {
+        System.out.println("Получено бинарное сообщение размером: " + message.remaining() + " байт");
+
+        try {
+            // Пример: сохраняем файл (можно настроить путь и имя файла)
+            File file = new File("received_file_" + System.currentTimeMillis() + ".bin");
+            FileOutputStream fos = new FileOutputStream(file);
+            byte[] bytes = new byte[message.remaining()];
+            message.get(bytes);
+            fos.write(bytes);
+            fos.close();
+
+            System.out.println("Файл сохранён как: " + file.getAbsolutePath());
+            conn.send("Файл успешно сохранён: " + file.getName());
+
+        } catch (IOException e) {
+            e.printStackTrace();
+            conn.send("Ошибка при сохранении файла: " + e.getMessage());
         }
     }
 
