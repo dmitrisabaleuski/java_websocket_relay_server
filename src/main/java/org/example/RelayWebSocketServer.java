@@ -37,6 +37,12 @@ public class RelayWebSocketServer extends WebSocketServer {
             String token = message.substring(6);
             clients.put(token, conn);
             conn.send("REGISTERED:" + token);
+
+            for (WebSocket client : clients.values()) {
+                if (!client.equals(conn)) {
+                    client.send("CONNECTED:" + token);
+                }
+            }
         } else if (message.startsWith("SEND:")) {
             String[] parts = message.split(":", 3);
             if (parts.length == 3) {
