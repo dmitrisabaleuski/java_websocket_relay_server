@@ -15,7 +15,7 @@ dependencies {
 }
 
 application {
-    mainClass.set("org.example.RelayWebSocketServer") // <-- замени на свой полный путь
+    mainClass.set("org.example.RelayWebSocketServer")
 }
 
 tasks.jar {
