@@ -11,10 +11,14 @@ import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 public class RelayWebSocketServer extends WebSocketServer {
 
     private final Map<String, WebSocket> clients = new ConcurrentHashMap<>();
+    private final ScheduledExecutorService pingScheduler = Executors.newSingleThreadScheduledExecutor();
 
     public RelayWebSocketServer(int port) {
         super(new InetSocketAddress(port));
@@ -86,6 +90,19 @@ public class RelayWebSocketServer extends WebSocketServer {
     @Override
     public void onStart() {
         System.out.println("Relay WebSocket Server started on port " + getPort());
+
+        pingScheduler.scheduleAtFixedRate(() -> {
+            for (WebSocket client : clients.values()) {
+                if (client.isOpen()) {
+                    try {
+                        client.sendPing();  // Отправить ping
+                    } catch (Exception e) {
+                        System.err.println("Ping failed: " + e.getMessage());
+                        e.printStackTrace();
+                    }
+                }
+            }
+        }, 0, 30, TimeUnit.SECONDS);
     }
 
     public static void main(String[] args) {
