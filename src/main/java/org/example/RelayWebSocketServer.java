@@ -65,8 +65,8 @@ public class RelayWebSocketServer extends WebSocketServer {
     }
 
     public static void main(String[] args) {
-        int port = 8080;
-        RelayWebSocketServer server = new RelayWebSocketServer(port);
+        int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "8080"));
+        RelayWebSocketServer server = new RelayWebSocketServer(new InetSocketAddress(port).getPort());
         server.start();
     }
 }
