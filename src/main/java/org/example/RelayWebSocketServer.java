@@ -15,6 +15,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class RelayWebSocketServer extends WebSocketServer {
 
     private final Map<String, WebSocket> clients = new ConcurrentHashMap<>();
+    private static final File storageDir = new File("uploads");
 
     public RelayWebSocketServer(int port) {
         super(new InetSocketAddress(port));
@@ -58,6 +59,18 @@ public class RelayWebSocketServer extends WebSocketServer {
                     client.send(message);
                 }
             }
+        } else if (message.startsWith("DELETEFILE:")) {
+            String fileName = message.substring(11);
+            File file = new File(storageDir, fileName);
+            if (file.exists()) {
+                if (file.delete()) {
+                    conn.send("DELETED:" + fileName);
+                } else {
+                    conn.send("ERROR:Cannot delete " + fileName);
+                }
+            } else {
+                conn.send("ERROR:File not found " + fileName);
+            }
         } else {
             conn.send("ERROR:Unknown command");
         }
@@ -79,6 +92,10 @@ public class RelayWebSocketServer extends WebSocketServer {
 
     @Override
     public void onStart() {
+        if (!storageDir.exists()) {
+            storageDir.mkdirs();
+        }
+        
         System.out.println("Relay WebSocket Server started on port " + getPort());
     }
 
