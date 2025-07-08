@@ -4,7 +4,11 @@ import org.java_websocket.server.WebSocketServer;
 import org.java_websocket.WebSocket;
 import org.java_websocket.handshake.ClientHandshake;
 
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.nio.ByteBuffer;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -29,7 +33,6 @@ public class RelayWebSocketServer extends WebSocketServer {
 
     @Override
     public void onMessage(WebSocket conn, String message) {
-        System.out.println("Message: " + message);
         if (message.startsWith("TOKEN:")) {
             String token = message.substring(6);
             clients.put(token, conn);
@@ -49,8 +52,23 @@ public class RelayWebSocketServer extends WebSocketServer {
             } else {
                 conn.send("ERROR:Invalid SEND format");
             }
+        } else if (message.startsWith("FILENAME:")) {
+            for (WebSocket client : clients.values()) {
+                if (!client.equals(conn)) {
+                    client.send(message);
+                }
+            }
         } else {
             conn.send("ERROR:Unknown command");
+        }
+    }
+
+    @Override
+    public void onMessage(WebSocket conn, ByteBuffer message) {
+        for (WebSocket client : clients.values()) {
+            if (!client.equals(conn)) {
+                client.send(message);
+            }
         }
     }
 
