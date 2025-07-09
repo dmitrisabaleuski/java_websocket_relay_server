@@ -7,6 +7,7 @@ import org.java_websocket.handshake.ClientHandshake;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -67,7 +68,7 @@ public class RelayWebSocketServer extends WebSocketServer {
             if (parts.length == 2) {
                 String token = parts[1];
                 clients.put(token, conn);
-                conn.send("REGISTERED:" + token);
+                conn.send("REGISTERED:" + Arrays.toString(parts));
                 System.out.println("Registered token: " + token);
             } else if (parts.length == 3) {
                 String token = parts[1];
@@ -76,7 +77,7 @@ public class RelayWebSocketServer extends WebSocketServer {
                 tokenPairs.put(token, pairToken);
                 tokenPairs.put(pairToken, token);
                 conn.send("REGISTERED:" + token);
-                System.out.println("Registered token: " + token);
+                System.out.println("Registered token: " + Arrays.toString(parts));
                 System.out.println("Paired " + token + " with " + pairToken);
 
                 WebSocket pairConn = clients.get(pairToken);
