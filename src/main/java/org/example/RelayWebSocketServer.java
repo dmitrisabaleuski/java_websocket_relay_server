@@ -15,6 +15,7 @@ import java.util.concurrent.TimeUnit;
 
 public class RelayWebSocketServer extends WebSocketServer {
 
+    private final Map<String, String> tokenPairs = new ConcurrentHashMap<>();
     private final Map<String, WebSocket> clients = new ConcurrentHashMap<>();
     private final Map<WebSocket, Boolean> receivingFile = new ConcurrentHashMap<>();
     private final ScheduledExecutorService pingScheduler = Executors.newSingleThreadScheduledExecutor();
@@ -31,47 +32,80 @@ public class RelayWebSocketServer extends WebSocketServer {
     @Override
     public void onClose(WebSocket conn, int code, String reason, boolean remote) {
         System.out.println("Connection closed: " + conn.getRemoteSocketAddress());
-        clients.entrySet().removeIf(entry -> entry.getValue().equals(conn));
+        String tokenToRemove = null;
+        for (Map.Entry<String, WebSocket> entry : clients.entrySet()) {
+            if (entry.getValue().equals(conn)) {
+                tokenToRemove = entry.getKey();
+                break;
+            }
+        }
+        if (tokenToRemove != null) {
+            clients.remove(tokenToRemove);
+            tokenPairs.remove(tokenToRemove);
+        }
         receivingFile.remove(conn);
     }
 
     @Override
     public void onMessage(WebSocket conn, String message) {
+
+        String senderToken = null;
+        for (Map.Entry<String, WebSocket> entry : clients.entrySet()) {
+            if (entry.getValue().equals(conn)) {
+                senderToken = entry.getKey();
+                break;
+            }
+        }
+        if (senderToken == null) {
+            conn.send("ERROR:Unknown sender");
+            return;
+        }
+
         if (message.startsWith("TOKEN:")) {
-            String token = message.substring(6);
-            clients.put(token, conn);
-            conn.send("REGISTERED:" + token);
+            String[] parts = message.split(":", 3);
+            if (parts.length == 3) {
+                String token = parts[1];
+                String pairToken = parts[2];
+                clients.put(token, conn);
+                tokenPairs.put(token, pairToken);
+                System.out.println("Registered token " + token + " with pair " + pairToken);
+                conn.send("REGISTERED:" + token);
+            } else {
+                conn.send("ERROR:Invalid TOKEN format, expected TOKEN:<token>:<pairToken>");
+            }
+            return;
         } else if (message.startsWith("FILE_INFO:")) {
-            String[] parts = message.split(":", 4);
-            if (parts.length == 4) {
+            String[] parts = message.split(":", 3);
+            if (parts.length == 3) {
                 String filename = parts[1];
                 String size = parts[2];
-                String senderToken = parts[3];
-
-                WebSocket target = clients.get(senderToken);
-                if (target != null && !target.equals(conn)) {
+                String targetToken = tokenPairs.get(senderToken);
+                WebSocket target = clients.get(targetToken);
+                if (target != null && target.isOpen()) {
                     target.send(message);
                     receivingFile.put(target, true);
+                } else {
+                    conn.send("ERROR:Target not connected");
                 }
+            } else {
+                conn.send("ERROR:Invalid FILE_INFO format");
             }
         } else if (message.equals("FILE_END")) {
-            String[] parts = message.split(":", 2);
-            if (parts.length == 2) {
-                String senderToken = parts[1];
-                WebSocket target = clients.get(senderToken);
-                if (target != null && !target.equals(conn)) {
-                    target.send(message);
-                    receivingFile.put(target, false);
-                }
+            String targetToken = tokenPairs.get(senderToken);
+            WebSocket target = clients.get(targetToken);
+            if (target != null && target.isOpen()) {
+                target.send("FILE_END");
+                receivingFile.put(target, false);
+            } else {
+                conn.send("ERROR:Target not connected");
             }
         } else if (message.equals("FILE_RECEIVED")) {
-            String[] parts = message.split(":", 2);
-            if (parts.length == 2) {
-                String senderToken = parts[1];
-                WebSocket target = clients.get(senderToken);
-                if (target != null) {
-                    target.send("FILE_RECEIVED");
-                }
+            String targetToken = tokenPairs.get(senderToken);
+            WebSocket target = clients.get(targetToken);
+            if (target != null && target.isOpen()) {
+                target.send("FILE_RECEIVED");
+            } else {
+                conn.send("ERROR:Target not connected");
             }
         } else {
             conn.send("ERROR:Unknown command");
@@ -89,12 +123,25 @@ public class RelayWebSocketServer extends WebSocketServer {
             String prefix = new String(prefixBytes, StandardCharsets.UTF_8);
 
             if ("FILE_DATA".equals(prefix)) {
-                for (WebSocket client : clients.values()) {
-                    if (!client.equals(conn) && receivingFile.getOrDefault(client, false)) {
-                        ByteBuffer toSend = message.duplicate();
-                        toSend.rewind();
-                        client.send(toSend);
+                String senderToken = null;
+                for (Map.Entry<String, WebSocket> entry : clients.entrySet()) {
+                    if (entry.getValue().equals(conn)) {
+                        senderToken = entry.getKey();
+                        break;
                     }
+                }
+                if (senderToken == null) {
+                    System.err.println("Unknown sender for binary message");
+                    return;
+                }
+                String targetToken = tokenPairs.get(senderToken);
+                WebSocket target = clients.get(targetToken);
+                if (target != null && target.isOpen() && receivingFile.getOrDefault(target, false)) {
+                    ByteBuffer toSend = message.duplicate();
+                    toSend.rewind();
+                    target.send(toSend);
+                } else {
+                    System.err.println("Target not connected or not receiving file");
                 }
             } else {
                 System.err.println("Unknown binary prefix received on server: " + prefix);
