@@ -7,7 +7,6 @@ import org.java_websocket.handshake.ClientHandshake;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -68,7 +67,7 @@ public class RelayWebSocketServer extends WebSocketServer {
             if (parts.length == 2) {
                 String token = parts[1];
                 clients.put(token, conn);
-                conn.send("REGISTERED:" + Arrays.toString(parts));
+                conn.send("REGISTERED:" + token);
                 System.out.println("Registered token: " + token);
             } else if (parts.length == 3) {
                 String token = parts[1];
@@ -77,7 +76,7 @@ public class RelayWebSocketServer extends WebSocketServer {
                 tokenPairs.put(token, pairToken);
                 tokenPairs.put(pairToken, token);
                 conn.send("REGISTERED:" + token);
-                System.out.println("Registered token: " + Arrays.toString(parts));
+                System.out.println("Registered token: " + token);
                 System.out.println("Paired " + token + " with " + pairToken);
 
                 WebSocket pairConn = clients.get(pairToken);
@@ -141,7 +140,15 @@ public class RelayWebSocketServer extends WebSocketServer {
                     conn.send("ERROR:Invalid REGISTER_PAIR format");
                 }
             } else if (message.equals("FILE_END")) {
+                System.out.println("senderToken: " + senderToken);
+                System.out.println("Current tokenPairs map: " + tokenPairs);
                 String targetToken = tokenPairs.get(senderToken);
+                if (targetToken == null) {
+                    conn.send("ERROR:Target not paired yet (missing target token)");
+                    System.err.println("ERROR: No pair found for sender token: " + senderToken);
+                    return;
+                }
+                System.out.println("targetToken: " + targetToken);
                 WebSocket target = clients.get(targetToken);
                 if (target != null && target.isOpen()) {
                     target.send("FILE_END");
