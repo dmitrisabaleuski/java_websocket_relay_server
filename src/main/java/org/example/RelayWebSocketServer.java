@@ -67,15 +67,28 @@ public class RelayWebSocketServer extends WebSocketServer {
 
     @Override
     public void onMessage(WebSocket conn, ByteBuffer message) {
-        String prefix = new String(message.array(), 0, 9, StandardCharsets.UTF_8);
-        if ("FILE_DATA".equals(prefix)) {
-            for (WebSocket client : clients.values()) {
-                if (!client.equals(conn) && receivingFile.getOrDefault(client, false)) {
-                    client.send(message);
+        try {
+            ByteBuffer duplicate = message.duplicate();
+            duplicate.rewind();
+
+            byte[] prefixBytes = new byte[9];
+            duplicate.get(prefixBytes);
+            String prefix = new String(prefixBytes, StandardCharsets.UTF_8);
+
+            if ("FILE_DATA".equals(prefix)) {
+                for (WebSocket client : clients.values()) {
+                    if (!client.equals(conn) && receivingFile.getOrDefault(client, false)) {
+                        ByteBuffer toSend = message.duplicate();
+                        toSend.rewind();
+                        client.send(toSend);
+                    }
                 }
+            } else {
+                System.err.println("Unknown binary prefix received on server: " + prefix);
             }
-        } else {
-            System.err.println("Unknown binary prefix received on server: " + prefix);
+        } catch (Exception e) {
+            System.err.println("Error while processing binary message: " + e.getMessage());
+            e.printStackTrace();
         }
     }
 
@@ -102,9 +115,15 @@ public class RelayWebSocketServer extends WebSocketServer {
         }, 0, 30, TimeUnit.SECONDS);
     }
 
+    @Override
+    public void stop(int timeout) throws InterruptedException {
+        super.stop(timeout);
+        pingScheduler.shutdownNow();
+    }
+
     public static void main(String[] args) {
         int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "8080"));
-        RelayWebSocketServer server = new RelayWebSocketServer(new InetSocketAddress(port).getPort());
+        RelayWebSocketServer server = new RelayWebSocketServer(port);
         server.start();
     }
 }
