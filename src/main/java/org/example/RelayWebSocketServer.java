@@ -18,6 +18,7 @@ import java.util.concurrent.TimeUnit;
 public class RelayWebSocketServer extends WebSocketServer {
 
     private final Map<String, WebSocket> clients = new ConcurrentHashMap<>();
+    private final Map<WebSocket, Boolean> receivingFile = new ConcurrentHashMap<>();
     private final ScheduledExecutorService pingScheduler = Executors.newSingleThreadScheduledExecutor();
 
     public RelayWebSocketServer(int port) {
@@ -33,6 +34,7 @@ public class RelayWebSocketServer extends WebSocketServer {
     public void onClose(WebSocket conn, int code, String reason, boolean remote) {
         System.out.println("Connection closed: " + conn.getRemoteSocketAddress());
         clients.entrySet().removeIf(entry -> entry.getValue().equals(conn));
+        receivingFile.remove(conn);
     }
 
     @Override
@@ -41,31 +43,18 @@ public class RelayWebSocketServer extends WebSocketServer {
             String token = message.substring(6);
             clients.put(token, conn);
             conn.send("REGISTERED:" + token);
-        } else if (message.startsWith("SEND:")) {
-            String[] parts = message.split(":", 3);
-            if (parts.length == 3) {
-                String targetToken = parts[1];
-                String payload = parts[2];
-                WebSocket target = clients.get(targetToken);
-                if (target != null) {
-                    target.send("RECEIVED:" + payload);
-                    conn.send("DELIVERED");
-                } else {
-                    conn.send("ERROR:Target not connected");
-                }
-            } else {
-                conn.send("ERROR:Invalid SEND format");
-            }
         } else if (message.startsWith("FILE_INFO:")) {
             for (WebSocket client : clients.values()) {
                 if (!client.equals(conn)) {
                     client.send(message);
+                    receivingFile.put(client, true);
                 }
             }
         } else if (message.equals("FILE_END")) {
             for (WebSocket client : clients.values()) {
                 if (!client.equals(conn)) {
                     client.send(message);
+                    receivingFile.put(client, false);
                 }
             }
         }else {
@@ -76,7 +65,7 @@ public class RelayWebSocketServer extends WebSocketServer {
     @Override
     public void onMessage(WebSocket conn, ByteBuffer message) {
         for (WebSocket client : clients.values()) {
-            if (!client.equals(conn)) {
+            if (!client.equals(conn) && receivingFile.getOrDefault(client, false)) {
                 client.send(message);
             }
         }
@@ -95,7 +84,7 @@ public class RelayWebSocketServer extends WebSocketServer {
             for (WebSocket client : clients.values()) {
                 if (client.isOpen()) {
                     try {
-                        client.sendPing();  // Отправить ping
+                        client.sendPing();  // Send ping
                     } catch (Exception e) {
                         System.err.println("Ping failed: " + e.getMessage());
                         e.printStackTrace();
