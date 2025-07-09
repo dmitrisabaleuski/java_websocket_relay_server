@@ -9,6 +9,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -64,10 +65,15 @@ public class RelayWebSocketServer extends WebSocketServer {
 
     @Override
     public void onMessage(WebSocket conn, ByteBuffer message) {
-        for (WebSocket client : clients.values()) {
-            if (!client.equals(conn) && receivingFile.getOrDefault(client, false)) {
-                client.send(message);
+        String prefix = new String(message.array(), 0, 9, StandardCharsets.UTF_8);
+        if ("FILE_DATA".equals(prefix)) {
+            for (WebSocket client : clients.values()) {
+                if (!client.equals(conn) && receivingFile.getOrDefault(client, false)) {
+                    client.send(message);
+                }
             }
+        } else {
+            System.err.println("Unknown binary prefix received on server: " + prefix);
         }
     }
 
