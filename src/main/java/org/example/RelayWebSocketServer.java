@@ -86,55 +86,55 @@ public class RelayWebSocketServer extends WebSocketServer {
                 conn.send("ERROR:Invalid TOKEN format, expected TOKEN:<token>:<pairToken>");
             }
             return;
-        }
-
-        String senderToken = null;
-        for (Map.Entry<String, WebSocket> entry : clients.entrySet()) {
-            if (entry.getValue().equals(conn)) {
-                senderToken = entry.getKey();
-                break;
+        } else {
+            String senderToken = null;
+            for (Map.Entry<String, WebSocket> entry : clients.entrySet()) {
+                if (entry.getValue().equals(conn)) {
+                    senderToken = entry.getKey();
+                    break;
+                }
             }
-        }
-        if (senderToken == null) {
-            conn.send("ERROR:Unknown sender");
-            return;
-        }
+            if (senderToken == null) {
+                conn.send("ERROR:Unknown sender");
+                return;
+            }
 
-        if (message.startsWith("FILE_INFO:")) {
-            String[] parts = message.split(":", 3);
-            if (parts.length == 3) {
-                String filename = parts[1];
-                String size = parts[2];
+            if (message.startsWith("FILE_INFO:")) {
+                String[] parts = message.split(":", 3);
+                if (parts.length == 3) {
+                    String filename = parts[1];
+                    String size = parts[2];
+                    String targetToken = tokenPairs.get(senderToken);
+                    WebSocket target = clients.get(targetToken);
+                    if (target != null && target.isOpen()) {
+                        target.send(message);
+                        receivingFile.put(target, true);
+                    } else {
+                        conn.send("ERROR:Target not connected");
+                    }
+                } else {
+                    conn.send("ERROR:Invalid FILE_INFO format");
+                }
+            } else if (message.equals("FILE_END")) {
                 String targetToken = tokenPairs.get(senderToken);
                 WebSocket target = clients.get(targetToken);
                 if (target != null && target.isOpen()) {
-                    target.send(message);
-                    receivingFile.put(target, true);
+                    target.send("FILE_END");
+                    receivingFile.put(target, false);
+                } else {
+                    conn.send("ERROR:Target not connected");
+                }
+            } else if (message.equals("FILE_RECEIVED")) {
+                String targetToken = tokenPairs.get(senderToken);
+                WebSocket target = clients.get(targetToken);
+                if (target != null && target.isOpen()) {
+                    target.send("FILE_RECEIVED");
                 } else {
                     conn.send("ERROR:Target not connected");
                 }
             } else {
-                conn.send("ERROR:Invalid FILE_INFO format");
+                conn.send("ERROR:Unknown command");
             }
-        } else if (message.equals("FILE_END")) {
-            String targetToken = tokenPairs.get(senderToken);
-            WebSocket target = clients.get(targetToken);
-            if (target != null && target.isOpen()) {
-                target.send("FILE_END");
-                receivingFile.put(target, false);
-            } else {
-                conn.send("ERROR:Target not connected");
-            }
-        } else if (message.equals("FILE_RECEIVED")) {
-            String targetToken = tokenPairs.get(senderToken);
-            WebSocket target = clients.get(targetToken);
-            if (target != null && target.isOpen()) {
-                target.send("FILE_RECEIVED");
-            } else {
-                conn.send("ERROR:Target not connected");
-            }
-        } else {
-            conn.send("ERROR:Unknown command");
         }
     }
 
