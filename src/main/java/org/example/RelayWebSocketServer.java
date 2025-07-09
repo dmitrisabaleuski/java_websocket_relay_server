@@ -62,6 +62,7 @@ public class RelayWebSocketServer extends WebSocketServer {
 
     @Override
     public void onMessage(WebSocket conn, String message) {
+        conn.send("MESSAGE: " + message);
         if (message.startsWith("TOKEN:")) {
             String[] parts = message.split(":", 3);
             if (parts.length >= 2) {
