@@ -4,9 +4,6 @@ import org.java_websocket.server.WebSocketServer;
 import org.java_websocket.WebSocket;
 import org.java_websocket.handshake.ClientHandshake;
 
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -45,21 +42,37 @@ public class RelayWebSocketServer extends WebSocketServer {
             clients.put(token, conn);
             conn.send("REGISTERED:" + token);
         } else if (message.startsWith("FILE_INFO:")) {
-            for (WebSocket client : clients.values()) {
-                if (!client.equals(conn)) {
-                    client.send(message);
-                    receivingFile.put(client, true);
+            String[] parts = message.split(":", 4);
+            if (parts.length == 4) {
+                String filename = parts[1];
+                String size = parts[2];
+                String senderToken = parts[3];
+
+                WebSocket target = clients.get(senderToken);
+                if (target != null && !target.equals(conn)) {
+                    target.send(message);
+                    receivingFile.put(target, true);
                 }
             }
         } else if (message.equals("FILE_END")) {
-            for (WebSocket client : clients.values()) {
-                if (!client.equals(conn)) {
-                    client.send(message);
-                    receivingFile.put(client, false);
+            String[] parts = message.split(":", 2);
+            if (parts.length == 2) {
+                String senderToken = parts[1];
+                WebSocket target = clients.get(senderToken);
+                if (target != null && !target.equals(conn)) {
+                    target.send(message);
+                    receivingFile.put(target, false);
                 }
             }
         } else if (message.equals("FILE_RECEIVED")) {
-            conn.send(message);
+            String[] parts = message.split(":", 2);
+            if (parts.length == 2) {
+                String senderToken = parts[1];
+                WebSocket target = clients.get(senderToken);
+                if (target != null) {
+                    target.send("FILE_RECEIVED");
+                }
+            }
         } else {
             conn.send("ERROR:Unknown command");
         }
