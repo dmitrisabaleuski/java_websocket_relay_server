@@ -59,8 +59,11 @@ public class RelayWebSocketServer extends WebSocketServer {
                 }
             }
         } else if (message.equals("FILE_RECEIVED")) {
-            System.out.println("Received FILE_RECEIVED from client");
-            conn.send("FILE_RECEIVED");
+            for (WebSocket client : clients.values()) {
+                if (!client.equals(conn)) {
+                    client.send(message);
+                }
+            }
         } else {
             conn.send("ERROR:Unknown command");
         }
