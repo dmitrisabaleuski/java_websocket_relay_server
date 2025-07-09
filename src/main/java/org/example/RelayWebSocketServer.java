@@ -64,22 +64,23 @@ public class RelayWebSocketServer extends WebSocketServer {
     public void onMessage(WebSocket conn, String message) {
         if (message.startsWith("TOKEN:")) {
             String[] parts = message.split(":", 3);
-            if (parts.length == 3) {
+            if (parts.length >= 2) {
                 String token = parts[1];
-                String pairToken = parts[2];
                 clients.put(token, conn);
-                tokenPairs.put(token, pairToken);
-                tokenPairs.put(pairToken, token);
-
-                System.out.println("Registered token " + token + " with pair " + pairToken);
-
                 conn.send("REGISTERED:" + token);
+                System.out.println("Registered token: " + token);
 
-                WebSocket pairConn = clients.get(pairToken);
-                if (pairConn != null && pairConn.isOpen()) {
-                    conn.send("PAIR_REGISTERED:" + pairToken);
-                    pairConn.send("PAIR_REGISTERED:" + token);
-                    System.out.println("Notified both " + token + " and " + pairToken + " about pair registration");
+                if (parts.length == 3 && !parts[2].isEmpty()) {
+                    String pairToken = parts[2];
+                    tokenPairs.put(token, pairToken);
+                    tokenPairs.put(pairToken, token);
+                    System.out.println("Paired " + token + " with " + pairToken);
+
+                    WebSocket pairConn = clients.get(pairToken);
+                    if (pairConn != null && pairConn.isOpen()) {
+                        conn.send("PAIR_REGISTERED:" + pairToken);
+                        pairConn.send("PAIR_REGISTERED:" + token);
+                    }
                 }
             } else {
                 conn.send("ERROR:Invalid TOKEN format, expected TOKEN:<token>:<pairToken>");
