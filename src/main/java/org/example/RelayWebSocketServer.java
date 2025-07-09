@@ -32,22 +32,60 @@ public class RelayWebSocketServer extends WebSocketServer {
     @Override
     public void onClose(WebSocket conn, int code, String reason, boolean remote) {
         System.out.println("Connection closed: " + conn.getRemoteSocketAddress());
-        String tokenToRemove = null;
+
+        String disconnectedToken = null;
         for (Map.Entry<String, WebSocket> entry : clients.entrySet()) {
             if (entry.getValue().equals(conn)) {
-                tokenToRemove = entry.getKey();
+                disconnectedToken = entry.getKey();
                 break;
             }
         }
-        if (tokenToRemove != null) {
-            clients.remove(tokenToRemove);
-            tokenPairs.remove(tokenToRemove);
+
+        if (disconnectedToken != null) {
+            clients.remove(disconnectedToken);
+
+            String pairToken = tokenPairs.remove(disconnectedToken);
+
+            if (pairToken != null) {
+                tokenPairs.remove(pairToken);
+
+                WebSocket pairConn = clients.get(pairToken);
+                if (pairConn != null && pairConn.isOpen()) {
+                    pairConn.send("PAIR_DISCONNECTED:" + disconnectedToken);
+                    System.out.println("Notified " + pairToken + " about disconnection of " + disconnectedToken);
+                }
+            }
         }
+
         receivingFile.remove(conn);
     }
 
     @Override
     public void onMessage(WebSocket conn, String message) {
+        if (message.startsWith("TOKEN:")) {
+            String[] parts = message.split(":", 3);
+            if (parts.length == 3) {
+                String token = parts[1];
+                String pairToken = parts[2];
+                clients.put(token, conn);
+                tokenPairs.put(token, pairToken);
+                tokenPairs.put(pairToken, token);
+
+                System.out.println("Registered token " + token + " with pair " + pairToken);
+
+                conn.send("REGISTERED:" + token);
+
+                WebSocket pairConn = clients.get(pairToken);
+                if (pairConn != null && pairConn.isOpen()) {
+                    conn.send("PAIR_REGISTERED:" + pairToken);
+                    pairConn.send("PAIR_REGISTERED:" + token);
+                    System.out.println("Notified both " + token + " and " + pairToken + " about pair registration");
+                }
+            } else {
+                conn.send("ERROR:Invalid TOKEN format, expected TOKEN:<token>:<pairToken>");
+            }
+            return;
+        }
 
         String senderToken = null;
         for (Map.Entry<String, WebSocket> entry : clients.entrySet()) {
@@ -61,20 +99,7 @@ public class RelayWebSocketServer extends WebSocketServer {
             return;
         }
 
-        if (message.startsWith("TOKEN:")) {
-            String[] parts = message.split(":", 3);
-            if (parts.length == 3) {
-                String token = parts[1];
-                String pairToken = parts[2];
-                clients.put(token, conn);
-                tokenPairs.put(token, pairToken);
-                System.out.println("Registered token " + token + " with pair " + pairToken);
-                conn.send("REGISTERED:" + token);
-            } else {
-                conn.send("ERROR:Invalid TOKEN format, expected TOKEN:<token>:<pairToken>");
-            }
-            return;
-        } else if (message.startsWith("FILE_INFO:")) {
+        if (message.startsWith("FILE_INFO:")) {
             String[] parts = message.split(":", 3);
             if (parts.length == 3) {
                 String filename = parts[1];
