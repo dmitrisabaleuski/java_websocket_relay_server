@@ -56,7 +56,7 @@ public class RelayWebSocketServer extends WebSocketServer {
             } else {
                 conn.send("ERROR:Invalid SEND format");
             }
-        } else if (message.startsWith("FILENAME:")) {
+        } else if (message.startsWith("FILE_INFO:")) {
             for (WebSocket client : clients.values()) {
                 if (!client.equals(conn)) {
                     client.send(message);
