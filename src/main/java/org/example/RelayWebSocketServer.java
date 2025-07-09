@@ -62,7 +62,6 @@ public class RelayWebSocketServer extends WebSocketServer {
 
     @Override
     public void onMessage(WebSocket conn, String message) {
-        conn.send("MESSAGE: " + message);
         if (message.startsWith("TOKEN:")) {
             String[] parts = message.split(":", 3);
             if (parts.length >= 2) {
@@ -115,6 +114,28 @@ public class RelayWebSocketServer extends WebSocketServer {
                     }
                 } else {
                     conn.send("ERROR:Invalid FILE_INFO format");
+                }
+            } else if (message.startsWith("REGISTER_PAIR:")) {
+                String[] parts = message.split(":", 3);
+                if (parts.length == 3) {
+                    String androidToken = parts[1];
+                    String pcToken = parts[2];
+
+                    tokenPairs.put(pcToken, androidToken);
+                    tokenPairs.put(androidToken, pcToken);
+                    System.out.println("Registered pair: PC " + pcToken + " <-> Android " + androidToken);
+
+                    WebSocket androidConn = clients.get(androidToken);
+                    WebSocket pcConn = clients.get(pcToken);
+
+                    if (androidConn != null && androidConn.isOpen()) {
+                        androidConn.send("PAIR_REGISTERED:" + pcToken);
+                    }
+                    if (pcConn != null && pcConn.isOpen()) {
+                        pcConn.send("PAIR_REGISTERED:" + androidToken);
+                    }
+                } else {
+                    conn.send("ERROR:Invalid REGISTER_PAIR format");
                 }
             } else if (message.equals("FILE_END")) {
                 String targetToken = tokenPairs.get(senderToken);
