@@ -132,27 +132,32 @@ public class RelayWebSocketServer extends WebSocketServer {
                 String androidToken = parts[1];
                 String pcToken = parts[2];
 
-                tokenPairs.put(pcToken, androidToken);
-                tokenPairs.put(androidToken, pcToken);
-                System.out.println("Registered pair: PC " + pcToken + " <-> Android " + androidToken);
+                String androidUserId = getUserIdFromToken(androidToken);
+                String pcUserId = getUserIdFromToken(pcToken);
 
-                WebSocket androidConn = clients.get(androidToken);
-                WebSocket pcConn = clients.get(pcToken);
+                if (androidUserId == null || pcUserId == null) {
+                    conn.send("ERROR:Invalid JWT token in REGISTER_PAIR");
+                    return;
+                }
+
+                tokenPairs.put(pcUserId, androidUserId);
+                tokenPairs.put(androidUserId, pcUserId);
+                System.out.println("Registered pair: PC " + pcUserId + " <-> Android " + androidUserId);
+
+                WebSocket androidConn = clients.get(androidUserId);
+                WebSocket pcConn = clients.get(pcUserId);
 
                 if (androidConn != null && androidConn.isOpen()) {
-                    androidConn.send("PAIR_REGISTERED:" + pcToken);
+                    androidConn.send("PAIR_REGISTERED:" + pcUserId);
                 }
 
                 if (pcConn == null) {
-                    System.err.println("PC connection for token " + pcToken + " is null!");
+                    System.err.println("PC connection for userId " + pcUserId + " is null!");
                 } else if (!pcConn.isOpen()) {
-                    System.err.println("PC connection for token " + pcToken + " is closed!");
+                    System.err.println("PC connection for userId " + pcUserId + " is closed!");
                 } else {
-                    pcConn.send("PAIR_REGISTERED:" + androidToken);
-                    System.out.println("Sent PAIR_REGISTERED to PC " + pcToken);
-                }
-                if (pcConn != null && pcConn.isOpen()) {
-                    pcConn.send("PAIR_REGISTERED:" + androidToken);
+                    pcConn.send("PAIR_REGISTERED:" + androidUserId);
+                    System.out.println("Sent PAIR_REGISTERED to PC " + pcUserId);
                 }
             } else {
                 conn.send("ERROR:Invalid REGISTER_PAIR format");
@@ -196,6 +201,18 @@ public class RelayWebSocketServer extends WebSocketServer {
             conn.send("ERROR:Unknown command");
         }
 
+    }
+
+    private String getUserIdFromToken(String jwtToken) {
+        try {
+            Algorithm algorithm = Algorithm.HMAC256(SECRET);
+            JWTVerifier verifier = JWT.require(algorithm).acceptLeeway(60).build();
+            DecodedJWT jwt = verifier.verify(jwtToken);
+            return jwt.getSubject();
+        } catch (Exception e) {
+            System.err.println("Invalid JWT token in REGISTER_PAIR: " + e.getMessage());
+            return null;
+        }
     }
 
     @Override
