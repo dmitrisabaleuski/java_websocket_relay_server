@@ -45,7 +45,7 @@ public class RelayWebSocketServer extends WebSocketServer {
         String jwtToken = authHeader.substring("Bearer ".length());
         try {
             Algorithm algorithm = Algorithm.HMAC256(SECRET);
-            JWTVerifier verifier = JWT.require(algorithm).build();
+            JWTVerifier verifier = JWT.require(algorithm).acceptLeeway(60).build();
             DecodedJWT jwt = verifier.verify(jwtToken);
             String userId = jwt.getSubject();
 
