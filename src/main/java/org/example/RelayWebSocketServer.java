@@ -195,7 +195,13 @@ public class RelayWebSocketServer extends WebSocketServer {
                     System.err.println("Unknown sender for binary message");
                     return;
                 }
+
                 String targetToken = tokenPairs.get(senderToken);
+                if (targetToken == null) {
+                    System.err.println("No paired target token found for sender: " + senderToken);
+                    return;
+                }
+
                 WebSocket target = clients.get(targetToken);
                 if (target != null && target.isOpen() && receivingFile.getOrDefault(target, false)) {
                     ByteBuffer toSend = message.duplicate();
