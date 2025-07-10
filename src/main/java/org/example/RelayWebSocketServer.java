@@ -159,6 +159,19 @@ public class RelayWebSocketServer extends WebSocketServer {
             } else {
                 conn.send("ERROR:Target not connected");
             }
+        } else if (message.equals("DELETE_PAIRING")) {
+            String pairToken = tokenPairs.remove(senderToken);
+            if (pairToken != null) {
+                tokenPairs.remove(pairToken);
+                WebSocket pairConn = clients.get(pairToken);
+                if (pairConn != null && pairConn.isOpen()) {
+                    pairConn.send("PAIR_DELETED:" + senderToken);
+                }
+                conn.send("PAIR_DELETED:SUCCESS");
+                System.out.println("Deleted pairing for: " + senderToken + " and " + pairToken);
+            } else {
+                conn.send("ERROR:No pairing found");
+            }
         } else if (message.equals("FILE_RECEIVED")) {
             String targetToken = tokenPairs.get(senderToken);
             WebSocket target = clients.get(targetToken);
