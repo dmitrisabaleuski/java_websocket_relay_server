@@ -200,7 +200,6 @@ public class RelayWebSocketServer extends WebSocketServer {
         } else if (message.startsWith("FILE_LIST:")) {
             String fileListJson = message.substring("FILE_LIST:".length());
 
-            String senderToken = null;
             for (Map.Entry<String, WebSocket> entry : clients.entrySet()) {
                 if (entry.getValue().equals(conn)) {
                     senderToken = entry.getKey();
@@ -230,7 +229,6 @@ public class RelayWebSocketServer extends WebSocketServer {
         } else if (message.startsWith("DELETE_FILE:")) {
             String fileId = message.substring("DELETE_FILE:".length());
 
-            String senderToken = null;
             for (Map.Entry<String, WebSocket> entry : clients.entrySet()) {
                 if (entry.getValue().equals(conn)) {
                     senderToken = entry.getKey();
