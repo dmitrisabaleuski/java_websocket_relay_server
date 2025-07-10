@@ -12,6 +12,7 @@ repositories {
 
 dependencies {
     implementation("org.java-websocket:Java-WebSocket:1.5.3")
+    implementation("com.auth0:java-jwt:4.4.0")
 }
 
 application {
