@@ -32,6 +32,7 @@ public class RelayWebSocketServer extends WebSocketServer {
     @Override
     public void onOpen(WebSocket conn, ClientHandshake handshake) {
         System.out.println("New connection: " + conn.getRemoteSocketAddress());
+        System.out.println("Handshake headers: " + handshake.iterateHttpFields());
 
         String authHeader = handshake.getFieldValue("Authorization");
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
@@ -61,7 +62,7 @@ public class RelayWebSocketServer extends WebSocketServer {
 
     @Override
     public void onClose(WebSocket conn, int code, String reason, boolean remote) {
-        System.out.println("Connection closed: " + conn.getRemoteSocketAddress());
+        System.out.println("Connection closed: " + conn.getRemoteSocketAddress() + ", code: " + code + ", reason: " + reason);
 
         String disconnectedToken = null;
         for (Map.Entry<String, WebSocket> entry : clients.entrySet()) {
@@ -96,6 +97,7 @@ public class RelayWebSocketServer extends WebSocketServer {
         for (Map.Entry<String, WebSocket> entry : clients.entrySet()) {
             if (entry.getValue().equals(conn)) {
                 senderToken = entry.getKey();
+                System.out.println("Received message from " + senderToken + ": " + message);
                 break;
             }
         }
@@ -106,6 +108,7 @@ public class RelayWebSocketServer extends WebSocketServer {
         }
 
         if (message.startsWith("FILE_INFO:")) {
+            System.out.println("Processing FILE_INFO from " + senderToken + ": " + message);
             String[] parts = message.split(":", 4);
             if (parts.length >= 4) {
                 String filename = parts[1];
@@ -214,7 +217,7 @@ public class RelayWebSocketServer extends WebSocketServer {
                     System.err.println("No paired target token found for sender: " + senderToken);
                     return;
                 }
-
+                System.out.println("Received FILE_DATA from " + senderToken + " for " + targetToken + " (" + message.remaining() + " bytes)");
                 WebSocket target = clients.get(targetToken);
                 if (target != null && target.isOpen() && receivingFile.getOrDefault(target, false)) {
                     ByteBuffer toSend = message.duplicate();
@@ -234,6 +237,9 @@ public class RelayWebSocketServer extends WebSocketServer {
 
     @Override
     public void onError(WebSocket conn, Exception ex) {
+        if (conn != null) {
+            System.err.println("Error from client: " + conn.getRemoteSocketAddress());
+        }
         ex.printStackTrace();
     }
 
@@ -243,6 +249,7 @@ public class RelayWebSocketServer extends WebSocketServer {
 
         pingScheduler.scheduleAtFixedRate(() -> {
             for (WebSocket client : clients.values()) {
+                System.out.println("Sending ping to " + client.getRemoteSocketAddress());
                 if (client.isOpen()) {
                     try {
                         client.sendPing();  // Send ping
