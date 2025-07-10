@@ -48,7 +48,7 @@ public class RelayWebSocketServer extends WebSocketServer {
             JWTVerifier verifier = JWT.require(algorithm).acceptLeeway(60).build();
             DecodedJWT jwt = verifier.verify(jwtToken);
             String userId = jwt.getSubject();
-
+            System.out.println("Client connected: " + userId);
             clients.put(userId, conn);
             conn.send("REGISTERED:" + userId);
             System.out.println("Registered userId (from JWT header): " + userId);
@@ -141,6 +141,15 @@ public class RelayWebSocketServer extends WebSocketServer {
 
                 if (androidConn != null && androidConn.isOpen()) {
                     androidConn.send("PAIR_REGISTERED:" + pcToken);
+                }
+
+                if (pcConn == null) {
+                    System.err.println("PC connection for token " + pcToken + " is null!");
+                } else if (!pcConn.isOpen()) {
+                    System.err.println("PC connection for token " + pcToken + " is closed!");
+                } else {
+                    pcConn.send("PAIR_REGISTERED:" + androidToken);
+                    System.out.println("Sent PAIR_REGISTERED to PC " + pcToken);
                 }
                 if (pcConn != null && pcConn.isOpen()) {
                     pcConn.send("PAIR_REGISTERED:" + androidToken);
