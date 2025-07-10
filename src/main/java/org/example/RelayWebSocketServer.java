@@ -197,6 +197,65 @@ public class RelayWebSocketServer extends WebSocketServer {
             } else {
                 conn.send("ERROR:Target not connected");
             }
+        } else if (message.startsWith("FILE_LIST:")) {
+            String fileListJson = message.substring("FILE_LIST:".length());
+
+            String senderToken = null;
+            for (Map.Entry<String, WebSocket> entry : clients.entrySet()) {
+                if (entry.getValue().equals(conn)) {
+                    senderToken = entry.getKey();
+                    break;
+                }
+            }
+
+            if (senderToken == null) {
+                conn.send("ERROR:Unknown sender - client not registered");
+                return;
+            }
+
+            String targetToken = tokenPairs.get(senderToken);
+            if (targetToken == null) {
+                conn.send("ERROR:No paired target for sender");
+                return;
+            }
+
+            WebSocket target = clients.get(targetToken);
+            if (target != null && target.isOpen()) {
+
+                target.send("FILE_LIST:" + fileListJson);
+                System.out.println("Forwarded FILE_LIST from " + senderToken + " to " + targetToken);
+            } else {
+                conn.send("ERROR:Target client not connected");
+            }
+        } else if (message.startsWith("DELETE_FILE:")) {
+            String fileId = message.substring("DELETE_FILE:".length());
+
+            String senderToken = null;
+            for (Map.Entry<String, WebSocket> entry : clients.entrySet()) {
+                if (entry.getValue().equals(conn)) {
+                    senderToken = entry.getKey();
+                    break;
+                }
+            }
+            if (senderToken == null) {
+                conn.send("ERROR:Unknown sender - client not registered");
+                return;
+            }
+
+            String targetToken = tokenPairs.get(senderToken);
+            if (targetToken == null) {
+                conn.send("ERROR:No paired target for sender");
+                return;
+            }
+
+            WebSocket target = clients.get(targetToken);
+            if (target != null && target.isOpen()) {
+
+                target.send("DELETE_FILE:" + fileId);
+                System.out.println("Forwarded DELETE_FILE from " + senderToken + " to " + targetToken + " for fileId: " + fileId);
+            } else {
+                conn.send("ERROR:Target client not connected");
+            }
         } else {
             conn.send("ERROR:Unknown command");
         }
