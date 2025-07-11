@@ -254,8 +254,21 @@ public class RelayWebSocketServer extends WebSocketServer {
             } else {
                 conn.send("ERROR:Target client not connected");
             }
+        } else if (message.equals("GET_FILES")) {
+            String targetToken = tokenPairs.get(senderToken);
+            if (targetToken == null) {
+                conn.send("ERROR:No paired target for sender");
+                System.err.println("ERROR: No pair found for sender token: " + senderToken);
+                return;
+            }
+            WebSocket target = clients.get(targetToken);
+            if (target != null && target.isOpen()) {
+                target.send("GET_FILES");
+                System.out.println("Forwarded GET_FILES from " + senderToken + " to " + targetToken);
+            } else {
+                conn.send("ERROR:Target client not connected");
+            }
         } else {
-            conn.send("TEST1: " + message);
             conn.send("ERROR:Unknown command");
         }
 
