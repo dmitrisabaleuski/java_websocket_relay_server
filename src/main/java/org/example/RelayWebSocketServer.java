@@ -255,6 +255,7 @@ public class RelayWebSocketServer extends WebSocketServer {
                 conn.send("ERROR:Target client not connected");
             }
         } else {
+            conn.send(message);
             conn.send("ERROR:Unknown command");
         }
 
