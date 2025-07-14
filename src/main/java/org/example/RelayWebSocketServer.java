@@ -150,7 +150,7 @@ public class RelayWebSocketServer extends WebSocketServer {
             String transferId = parts[1];
             String fileName = parts[2];
             long fileSize = Long.parseLong(parts[3]);
-            senderToken = parts[4];
+            String senderTokenFromMsg = parts[4];
 
             String targetToken = tokenPairs.get(senderToken);
             Set<WebSocket> targets = clients.get(targetToken);
