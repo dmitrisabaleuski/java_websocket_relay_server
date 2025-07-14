@@ -28,6 +28,7 @@ public class RelayWebSocketServer extends WebSocketServer {
 
     public RelayWebSocketServer(int port) {
         super(new InetSocketAddress(port));
+        setConnectionLostTimeout(120);
     }
 
     @Override
