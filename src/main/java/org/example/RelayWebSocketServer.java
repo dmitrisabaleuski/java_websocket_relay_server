@@ -105,7 +105,7 @@ public class RelayWebSocketServer extends WebSocketServer {
     public void onMessage(WebSocket conn, String message) {
         String senderToken = null;
         for (Map.Entry<String, Set<WebSocket>> entry : clients.entrySet()) {
-            if (entry.getValue().equals(conn)) {
+            if (entry.getValue().contains(conn)) {
                 senderToken = entry.getKey();
 
                 System.out.println("Received message from " + senderToken + ": " + message);
