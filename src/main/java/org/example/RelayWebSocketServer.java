@@ -80,22 +80,6 @@ public class RelayWebSocketServer extends WebSocketServer {
 
         if (disconnectedToken != null) {
             clients.remove(disconnectedToken);
-
-            String pairToken = tokenPairs.remove(disconnectedToken);
-
-            if (pairToken != null) {
-                tokenPairs.remove(pairToken);
-
-                Set<WebSocket> pairConns = clients.get(pairToken);
-                if (pairConns != null) {
-                    for (WebSocket pairConn : pairConns) {
-                        if (pairConn.isOpen()) {
-                            pairConn.send("PAIR_DISCONNECTED:" + disconnectedToken);
-                            System.out.println("Notified " + pairToken + " about disconnection of " + disconnectedToken);
-                        }
-                    }
-                }
-            }
         }
 
         receivingFile.remove(conn);
@@ -153,10 +137,14 @@ public class RelayWebSocketServer extends WebSocketServer {
                     conn.send("ERROR:Invalid JWT token in REGISTER_PAIR");
                     return;
                 }
-                tokenPairs.put(pcUserId, androidUserId);
-                tokenPairs.put(androidUserId, pcUserId);
 
-                System.out.println("Registered pair: PC " + pcUserId + " <-> Android " + androidUserId);
+                boolean changed = false;
+                if (!pcUserId.equals(tokenPairs.get(androidUserId)) || !androidUserId.equals(tokenPairs.get(pcUserId))) {
+                    tokenPairs.put(pcUserId, androidUserId);
+                    tokenPairs.put(androidUserId, pcUserId);
+                    changed = true;
+                    System.out.println("Registered pair: PC " + pcUserId + " <-> Android " + androidUserId);
+                }
 
                 Set<WebSocket> androidConns = clients.get(androidUserId);
                 Set<WebSocket> pcConns = clients.get(pcUserId);
@@ -168,16 +156,15 @@ public class RelayWebSocketServer extends WebSocketServer {
                         }
                     }
                 }
-
-                if (pcConns == null) {
-                    System.err.println("PC connection for userId " + pcUserId + " is null!");
-                } else {
+                if (pcConns != null) {
                     for (WebSocket pcConn : pcConns) {
                         if (pcConn.isOpen()) {
                             pcConn.send("PAIR_REGISTERED:" + androidUserId);
-                            System.out.println("Sent PAIR_REGISTERED to PC " + pcUserId);
                         }
                     }
+                }
+                if (!changed) {
+                    System.out.println("REGISTER_PAIR ignored: same pairing already exists");
                 }
             } else {
                 conn.send("ERROR:Invalid REGISTER_PAIR format");
