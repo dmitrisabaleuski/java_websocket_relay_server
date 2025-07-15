@@ -10,9 +10,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 import com.auth0.jwt.JWT;
 import com.auth0.jwt.algorithms.Algorithm;
 import com.auth0.jwt.interfaces.DecodedJWT;
@@ -22,10 +19,8 @@ public class RelayWebSocketServer extends WebSocketServer {
 
     private final Map<String, String> tokenPairs = new ConcurrentHashMap<>();
     private final Map<String, Set<WebSocket>> clients = new ConcurrentHashMap<>();
-    private final Map<WebSocket, Boolean> receivingFile = new ConcurrentHashMap<>();
-    private final ScheduledExecutorService pingScheduler = Executors.newSingleThreadScheduledExecutor();
-    private static final String SECRET = "eY9xh9F!j$3Kz0@VqLu7pT1cG2mNwqAr";
     private final Map<String, TransferSession> transfers = new ConcurrentHashMap<>();
+    private static final String SECRET = "eY9xh9F!j$3Kz0@VqLu7pT1cG2mNwqAr";
 
     public RelayWebSocketServer(int port) {
         super(new InetSocketAddress(port));
@@ -54,43 +49,27 @@ public class RelayWebSocketServer extends WebSocketServer {
         }
     }
 
-
     @Override
     public void onOpen(WebSocket conn, ClientHandshake handshake) {
-        System.out.println("New connection: " + conn.getRemoteSocketAddress());
-        System.out.println("Handshake headers: " + handshake.iterateHttpFields());
-
         String authHeader = handshake.getFieldValue("Authorization");
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-            System.out.println("Missing or invalid Authorization header, closing connection");
-            conn.send("ERROR:Missing or invalid Authorization header");
             conn.close(1008, "Unauthorized");
             return;
         }
-
         String jwtToken = authHeader.substring("Bearer ".length());
         try {
             Algorithm algorithm = Algorithm.HMAC256(SECRET);
             JWTVerifier verifier = JWT.require(algorithm).acceptLeeway(60).build();
             DecodedJWT jwt = verifier.verify(jwtToken);
             String userId = jwt.getSubject();
-            System.out.println("Client connected: " + userId);
-
             clients.computeIfAbsent(userId, k -> ConcurrentHashMap.newKeySet()).add(conn);
-            conn.send("REGISTERED:" + userId);
-
-            System.out.println("Registered userId (from JWT header): " + userId);
         } catch (Exception e) {
-            conn.send("ERROR:Invalid JWT token");
-            System.err.println("Invalid JWT: " + e.getMessage());
             conn.close(1008, "Unauthorized");
         }
     }
 
     @Override
     public void onClose(WebSocket conn, int code, String reason, boolean remote) {
-        System.out.println("Connection closed: " + conn.getRemoteSocketAddress() + ", code: " + code + ", reason: " + reason);
-
         String disconnectedToken = null;
         for (Map.Entry<String, Set<WebSocket>> entry : clients.entrySet()) {
             if (entry.getValue().contains(conn)) {
@@ -102,28 +81,10 @@ public class RelayWebSocketServer extends WebSocketServer {
                 break;
             }
         }
-
         if (disconnectedToken != null) {
             clients.remove(disconnectedToken);
-
-            String pairToken = tokenPairs.remove(disconnectedToken);
-
-            if (pairToken != null) {
-                tokenPairs.remove(pairToken);
-
-                Set<WebSocket> pairConns = clients.get(pairToken);
-                if (pairConns != null) {
-                    for (WebSocket pairConn : pairConns) {
-                        if (pairConn.isOpen()) {
-                            pairConn.send("PAIR_DISCONNECTED:" + disconnectedToken);
-                            System.out.println("Notified " + pairToken + " about disconnection of " + disconnectedToken);
-                        }
-                    }
-                }
-            }
+            tokenPairs.remove(disconnectedToken);
         }
-
-        receivingFile.remove(conn);
     }
 
     @Override
@@ -132,13 +93,9 @@ public class RelayWebSocketServer extends WebSocketServer {
         for (Map.Entry<String, Set<WebSocket>> entry : clients.entrySet()) {
             if (entry.getValue().contains(conn)) {
                 senderToken = entry.getKey();
-
-                System.out.println("Received message from " + senderToken + ": " + message);
-
                 break;
             }
         }
-
         if (senderToken == null) {
             conn.send("ERROR:Unknown sender - client not registered");
             return;
@@ -151,7 +108,6 @@ public class RelayWebSocketServer extends WebSocketServer {
             String fileName = parts[2];
             long fileSize = Long.parseLong(parts[3]);
             String senderTokenFromMsg = parts[4];
-
             String targetToken = tokenPairs.get(senderToken);
             Set<WebSocket> targets = clients.get(targetToken);
             if (targets == null || targets.isEmpty()) {
@@ -159,52 +115,21 @@ public class RelayWebSocketServer extends WebSocketServer {
                 return;
             }
             WebSocket targetConn = targets.iterator().next();
-
             transfers.put(transferId, new TransferSession(transferId, senderToken, targetToken, conn, targetConn, fileName, fileSize));
-
             targetConn.send(message);
         } else if (message.startsWith("REGISTER_PAIR:")) {
             String[] parts = message.split(":", 3);
             if (parts.length == 3) {
                 String androidToken = parts[1];
                 String pcToken = parts[2];
-
                 String androidUserId = getUserIdFromToken(androidToken);
                 String pcUserId = getUserIdFromToken(pcToken);
-
                 if (androidUserId == null || pcUserId == null) {
                     conn.send("ERROR:Invalid JWT token in REGISTER_PAIR");
                     return;
                 }
-
                 tokenPairs.put(pcUserId, androidUserId);
                 tokenPairs.put(androidUserId, pcUserId);
-
-                System.out.println("Registered pair: PC " + pcUserId + " <-> Android " + androidUserId);
-
-                Set<WebSocket> androidConns = clients.get(androidUserId);
-                Set<WebSocket> pcConns = clients.get(pcUserId);
-
-                if (androidConns != null) {
-                    for (WebSocket androidConn : androidConns) {
-                        if (androidConn.isOpen()) {
-                            androidConn.send("PAIR_REGISTERED:" + pcUserId);
-                        }
-                    }
-                }
-
-                if (pcConns == null) {
-                    System.err.println("PC connection for userId " + pcUserId + " is null!");
-                } else {
-                    for (WebSocket pcConn : pcConns) {
-                        if (pcConn.isOpen()) {
-                            pcConn.send("PAIR_REGISTERED:" + androidUserId);
-                            System.out.println("Sent PAIR_REGISTERED to PC " + pcUserId);
-                        }
-                    }
-                }
-            } else {
-                conn.send("ERROR:Invalid REGISTER_PAIR format");
             }
         } else if (message.startsWith("FILE_END:")) {
             String[] parts = message.split(":", 2);
@@ -215,23 +140,6 @@ public class RelayWebSocketServer extends WebSocketServer {
                 ts.ended = true;
                 ts.targetConn.send(message);
             }
-        } else if (message.equals("DELETE_PAIRING")) {
-            String pairToken = tokenPairs.remove(senderToken);
-            if (pairToken != null) {
-                tokenPairs.remove(pairToken);
-                Set<WebSocket> pairConns = clients.get(pairToken);
-                if (pairConns != null) {
-                    for (WebSocket pairConn : pairConns) {
-                        if (pairConn.isOpen()) {
-                            pairConn.send("PAIR_DELETED:" + senderToken);
-                        }
-                    }
-                }
-                conn.send("PAIR_DELETED:SUCCESS");
-                System.out.println("Deleted pairing for: " + senderToken + " and " + pairToken);
-            } else {
-                conn.send("ERROR:No pairing found");
-            }
         } else if (message.startsWith("FILE_RECEIVED:")) {
             String[] parts = message.split(":", 2);
             if (parts.length < 2) return;
@@ -240,68 +148,21 @@ public class RelayWebSocketServer extends WebSocketServer {
             if (ts != null && ts.senderConn.isOpen()) {
                 ts.senderConn.send(message);
             }
-            transfers.remove(transferId); // убрать завершённую сессию
-        } else if (message.startsWith("FILE_LIST:")) {
-            String fileListJson = message.substring("FILE_LIST:".length());
-
-            String targetToken = tokenPairs.get(senderToken);
-            if (targetToken == null) {
-                conn.send("ERROR:No paired target for sender");
-                return;
-            }
-
-            Set<WebSocket> targets = clients.get(targetToken);
-            if (targets != null && !targets.isEmpty()) {
-                for (WebSocket target : targets) {
-                    if (target.isOpen()) {
-                        target.send("FILE_LIST:" + fileListJson);
-                        System.out.println("Forwarded FILE_LIST from " + senderToken + " to " + targetToken);
-                    }
-                }
-            } else {
-                conn.send("ERROR:Target client not connected");
-            }
-        } else if (message.startsWith("DELETE_FILE:")) {
-            String fileId = message.substring("DELETE_FILE:".length());
-
-            String targetToken = tokenPairs.get(senderToken);
-            if (targetToken == null) {
-                conn.send("ERROR:No paired target for sender");
-                return;
-            }
-
-            Set<WebSocket> targets = clients.get(targetToken);
-            if (targets != null && !targets.isEmpty()) {
-                for (WebSocket target : targets) {
-                    if (target.isOpen()) {
-                        target.send("DELETE_FILE:" + fileId);
-                        System.out.println("Forwarded DELETE_FILE from " + senderToken + " to " + targetToken + " for fileId: " + fileId);
-                    }
-                }
-            } else {
-                conn.send("ERROR:Target client not connected");
-            }
-        } else if (message.equals("GET_FILES")) {
-            String targetToken = tokenPairs.get(senderToken);
-            if (targetToken == null) {
-                conn.send("ERROR:No paired target for sender");
-                System.err.println("ERROR: No pair found for sender token: " + senderToken);
-                return;
-            }
-            Set<WebSocket> targets = clients.get(targetToken);
-            if (targets != null && !targets.isEmpty()) {
-                for (WebSocket target : targets) {
-                    if (target.isOpen()) {
-                        target.send("GET_FILES");
-                        System.out.println("Forwarded GET_FILES from " + senderToken + " to " + targetToken);
-                    }
-                }
-            } else {
-                conn.send("ERROR:Target client not connected");
-            }
-        } else {
-            conn.send("ERROR:Unknown command");
+            transfers.remove(transferId);
         }
+    }
+
+    @Override
+    public void onError(WebSocket conn, Exception ex) {
+        System.err.println("WebSocket error: " + ex.getMessage());
+        if (conn != null) {
+            System.err.println("From connection: " + conn.getRemoteSocketAddress());
+        }
+        ex.printStackTrace();
+    }
+
+    @Override
+    public void onStart() {
 
     }
 
@@ -312,7 +173,6 @@ public class RelayWebSocketServer extends WebSocketServer {
             DecodedJWT jwt = verifier.verify(jwtToken);
             return jwt.getSubject();
         } catch (Exception e) {
-            System.err.println("Invalid JWT token in REGISTER_PAIR: " + e.getMessage());
             return null;
         }
     }
@@ -324,7 +184,6 @@ public class RelayWebSocketServer extends WebSocketServer {
         String prefix = new String(prefixBuf, StandardCharsets.UTF_8).trim();
         if (!prefix.startsWith("FILE_DATA:")) return;
         String transferId = prefix.substring("FILE_DATA:".length()).trim();
-
         TransferSession ts = transfers.get(transferId);
         if (ts != null && ts.targetConn.isOpen()) {
             ByteBuffer forwardBuf = ByteBuffer.allocate(64 + message.remaining());
@@ -334,41 +193,6 @@ public class RelayWebSocketServer extends WebSocketServer {
             ts.targetConn.send(forwardBuf);
             ts.bytesTransferred += forwardBuf.remaining();
         }
-    }
-
-    @Override
-    public void onError(WebSocket conn, Exception ex) {
-        if (conn != null) {
-            System.err.println("Error from client: " + conn.getRemoteSocketAddress());
-        }
-        ex.printStackTrace();
-    }
-
-    @Override
-    public void onStart() {
-        System.out.println("Relay WebSocket Server started on port " + getPort());
-
-        pingScheduler.scheduleAtFixedRate(() -> {
-            for (Set<WebSocket> wsSet : clients.values()) {
-                for (WebSocket client : wsSet) {
-                    System.out.println("Sending ping to " + client.getRemoteSocketAddress());
-                    if (client.isOpen()) {
-                        try {
-                            client.sendPing();
-                        } catch (Exception e) {
-                            System.err.println("Ping failed: " + e.getMessage());
-                            e.printStackTrace();
-                        }
-                    }
-                }
-            }
-        }, 0, 30, TimeUnit.SECONDS);
-    }
-
-    @Override
-    public void stop(int timeout) throws InterruptedException {
-        super.stop(timeout);
-        pingScheduler.shutdownNow();
     }
 
     public static void main(String[] args) {
