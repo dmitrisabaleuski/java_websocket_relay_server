@@ -26,6 +26,8 @@ public class RelayWebSocketServer extends WebSocketServer {
     private final ScheduledExecutorService pingScheduler = Executors.newSingleThreadScheduledExecutor();
     private static final String SECRET = "eY9xh9F!j$3Kz0@VqLu7pT1cG2mNwqAr";
 
+    private final Map<String, Long> fileTransferSize = new ConcurrentHashMap<>();
+
     public RelayWebSocketServer(int port) {
         super(new InetSocketAddress(port));
     }
@@ -108,6 +110,7 @@ public class RelayWebSocketServer extends WebSocketServer {
             String[] parts = message.split(":", 5);
             if (parts.length >= 4) {
                 String transferId = parts[1];
+                fileTransferSize.put(transferId, 0L);
                 String filename = parts[2];
                 String size = parts[3];
                 String tokenFromMessage = parts[4];
@@ -172,6 +175,9 @@ public class RelayWebSocketServer extends WebSocketServer {
         } else if (message.startsWith("FILE_END:")) {
             String[] parts = message.split(":", 2);
             String transferId = parts[1];
+            Long total = fileTransferSize.get(transferId);
+            System.out.println("FILE_END for transferId=" + transferId + ", total received bytes=" + total);
+            fileTransferSize.remove(transferId);
             String targetToken = tokenPairs.get(senderToken);
             Set<WebSocket> targets = clients.get(targetToken);
             if (targets != null && !targets.isEmpty()) {
@@ -298,6 +304,10 @@ public class RelayWebSocketServer extends WebSocketServer {
             if (prefix.startsWith("FILE_DATA:")) {
                 String transferId = prefix.substring("FILE_DATA:".length()).trim();
                 String senderToken = null;
+                int dataLen = duplicate.remaining();
+                fileTransferSize.merge(transferId, (long)dataLen, Long::sum); // увеличиваем размер
+                System.out.println("Received FILE_DATA for transferId=" + transferId + ", chunk=" + dataLen +
+                        ", total=" + fileTransferSize.get(transferId));
                 for (Map.Entry<String, Set<WebSocket>> entry : clients.entrySet()) {
                     if (entry.getValue().contains(conn)) {
                         senderToken = entry.getKey();
