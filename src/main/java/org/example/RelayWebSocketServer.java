@@ -372,7 +372,7 @@ public class RelayWebSocketServer extends WebSocketServer {
     }
 
     public static void main(String[] args) {
-        int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "8080"));
+        int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "10000"));
         RelayWebSocketServer server = new RelayWebSocketServer(port);
         server.start();
     }
