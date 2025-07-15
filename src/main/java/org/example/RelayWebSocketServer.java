@@ -124,9 +124,9 @@ public class RelayWebSocketServer extends WebSocketServer {
             String[] parts = message.split(":", 5);
             if (parts.length >= 4) {
                 String transferId = parts[1];
-                String filename = parts[1];
-                String size = parts[2];
-                String tokenFromMessage = parts[3];
+                String filename = parts[2];
+                String size = parts[3];
+                String tokenFromMessage = parts[4];
 
                 String targetToken = tokenPairs.get(senderToken);
                 Set<WebSocket> targets = clients.get(targetToken);
@@ -306,19 +306,29 @@ public class RelayWebSocketServer extends WebSocketServer {
 
             byte[] prefixBytes = new byte[64];
             duplicate.get(prefixBytes);
-            String prefix = new String(prefixBytes, StandardCharsets.UTF_8);
+            String prefix = new String(prefixBytes, StandardCharsets.UTF_8).trim();
 
-            if ("FILE_DATA".equals(prefix)) {
+            if (prefix.startsWith("FILE_DATA:")) {
                 String transferId = prefix.substring("FILE_DATA:".length()).trim();
                 String senderToken = null;
+                for (Map.Entry<String, Set<WebSocket>> entry : clients.entrySet()) {
+                    if (entry.getValue().contains(conn)) {
+                        senderToken = entry.getKey();
+                        break;
+                    }
+                }
+                if (senderToken == null) {
+                    System.err.println("Unknown sender for binary message");
+                    return;
+                }
                 String targetToken = tokenPairs.get(senderToken);
                 Set<WebSocket> targets = clients.get(targetToken);
                 if (targets != null && !targets.isEmpty()) {
                     for (WebSocket target : targets) {
                         if (target.isOpen()) {
-                            ByteBuffer toSend = ByteBuffer.allocate(prefixBytes.length + message.remaining());
+                            ByteBuffer toSend = ByteBuffer.allocate(prefixBytes.length + duplicate.remaining());
                             toSend.put(prefixBytes);
-                            toSend.put(message);
+                            toSend.put(duplicate);
                             toSend.flip();
                             target.send(toSend);
                         }
