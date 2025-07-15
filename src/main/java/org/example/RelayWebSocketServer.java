@@ -67,8 +67,8 @@ public class RelayWebSocketServer extends WebSocketServer {
 
     @Override
     public void onClose(WebSocket conn, int code, String reason, boolean remote) {
-        System.out.println("Connection closed: " + conn.getRemoteSocketAddress() + ", code: " + code + ", reason: " + reason);
-
+        System.out.println("Connection closed: " + conn.getRemoteSocketAddress() +
+                ", code: " + code + ", reason: " + reason + ", remote: " + remote);
         String disconnectedToken = null;
         for (Map.Entry<String, Set<WebSocket>> entry : clients.entrySet()) {
             if (entry.getValue().contains(conn)) {
@@ -352,10 +352,12 @@ public class RelayWebSocketServer extends WebSocketServer {
 
     @Override
     public void onError(WebSocket conn, Exception ex) {
-        if (conn != null) {
+        System.err.println("Error: " + ex.getMessage());
+        ex.printStackTrace();
+        /*if (conn != null) {
             System.err.println("Error from client: " + conn.getRemoteSocketAddress());
         }
-        ex.printStackTrace();
+        ex.printStackTrace();*/
     }
 
     @Override
