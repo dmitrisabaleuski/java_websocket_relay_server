@@ -121,8 +121,9 @@ public class RelayWebSocketServer extends WebSocketServer {
         if (message.startsWith("FILE_INFO:")) {
             System.out.println("Processing FILE_INFO from " + senderToken + ": " + message);
 
-            String[] parts = message.split(":", 4);
+            String[] parts = message.split(":", 5);
             if (parts.length >= 4) {
+                String transferId = parts[1];
                 String filename = parts[1];
                 String size = parts[2];
                 String tokenFromMessage = parts[3];
@@ -133,7 +134,6 @@ public class RelayWebSocketServer extends WebSocketServer {
                     for (WebSocket target : targets) {
                         if (target.isOpen()) {
                             target.send(message);
-                            receivingFile.put(target, true);
                         }
                     }
                 } else {
@@ -182,23 +182,17 @@ public class RelayWebSocketServer extends WebSocketServer {
             } else {
                 conn.send("ERROR:Invalid REGISTER_PAIR format");
             }
-        } else if (message.equals("FILE_END")) {
+        } else if (message.startsWith("FILE_END:")) {
+            String[] parts = message.split(":", 2);
+            String transferId = parts[1];
             String targetToken = tokenPairs.get(senderToken);
-            if (targetToken == null) {
-                conn.send("ERROR:Target not paired yet (missing target token)");
-                System.err.println("ERROR: No pair found for sender token: " + senderToken);
-                return;
-            }
             Set<WebSocket> targets = clients.get(targetToken);
             if (targets != null && !targets.isEmpty()) {
                 for (WebSocket target : targets) {
                     if (target.isOpen()) {
-                        target.send("FILE_END");
-                        receivingFile.put(target, false);
+                        target.send("FILE_END:" + transferId);
                     }
                 }
-            } else {
-                conn.send("ERROR:Target not connected");
             }
         } else if (message.equals("DELETE_PAIRING")) {
             String pairToken = tokenPairs.remove(senderToken);
@@ -217,17 +211,17 @@ public class RelayWebSocketServer extends WebSocketServer {
             } else {
                 conn.send("ERROR:No pairing found");
             }
-        } else if (message.equals("FILE_RECEIVED")) {
+        } else if (message.startsWith("FILE_RECEIVED:")) {
+            String[] parts = message.split(":", 2);
+            String transferId = parts[1];
             String targetToken = tokenPairs.get(senderToken);
             Set<WebSocket> targets = clients.get(targetToken);
             if (targets != null && !targets.isEmpty()) {
                 for (WebSocket target : targets) {
                     if (target.isOpen()) {
-                        target.send("FILE_RECEIVED");
+                        target.send("FILE_RECEIVED:" + transferId);
                     }
                 }
-            } else {
-                conn.send("ERROR:Target not connected");
             }
         } else if (message.startsWith("FILE_LIST:")) {
             String fileListJson = message.substring("FILE_LIST:".length());
@@ -310,42 +304,25 @@ public class RelayWebSocketServer extends WebSocketServer {
             ByteBuffer duplicate = message.duplicate();
             duplicate.rewind();
 
-            byte[] prefixBytes = new byte[9];
+            byte[] prefixBytes = new byte[64];
             duplicate.get(prefixBytes);
             String prefix = new String(prefixBytes, StandardCharsets.UTF_8);
 
             if ("FILE_DATA".equals(prefix)) {
+                String transferId = prefix.substring("FILE_DATA:".length()).trim();
                 String senderToken = null;
-                for (Map.Entry<String, Set<WebSocket>> entry : clients.entrySet()) {
-                    if (entry.getValue().contains(conn)) {
-                        senderToken = entry.getKey();
-                        break;
-                    }
-                }
-                if (senderToken == null) {
-                    System.err.println("Unknown sender for binary message");
-                    return;
-                }
-
                 String targetToken = tokenPairs.get(senderToken);
-                if (targetToken == null) {
-                    System.err.println("No paired target token found for sender: " + senderToken);
-                    return;
-                }
-
-                System.out.println("Received FILE_DATA from " + senderToken + " for " + targetToken + " (" + message.remaining() + " bytes)");
-
                 Set<WebSocket> targets = clients.get(targetToken);
                 if (targets != null && !targets.isEmpty()) {
                     for (WebSocket target : targets) {
-                        if (target.isOpen() && receivingFile.getOrDefault(target, false)) {
-                            ByteBuffer toSend = message.duplicate();
-                            toSend.rewind();
+                        if (target.isOpen()) {
+                            ByteBuffer toSend = ByteBuffer.allocate(prefixBytes.length + message.remaining());
+                            toSend.put(prefixBytes);
+                            toSend.put(message);
+                            toSend.flip();
                             target.send(toSend);
                         }
                     }
-                } else {
-                    System.err.println("Target not connected or not receiving file");
                 }
             } else {
                 System.err.println("Unknown binary prefix received on server: " + prefix);
