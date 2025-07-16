@@ -4,9 +4,13 @@ import org.java_websocket.server.WebSocketServer;
 import org.java_websocket.WebSocket;
 import org.java_websocket.handshake.ClientHandshake;
 
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.Collections;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -28,9 +32,11 @@ public class RelayWebSocketServer extends WebSocketServer {
 
     private final Map<String, Long> fileTransferSize = new ConcurrentHashMap<>();
     private final Map<String, Long> fileExpectedSize = new ConcurrentHashMap<>();
+    private final Map<String, OutputStream> activeFileStreams = new ConcurrentHashMap<>();
+    private final Map<String, String> activeFileNames = new ConcurrentHashMap<>();
 
     public RelayWebSocketServer(int port) {
-        super(new InetSocketAddress(port));
+        super(new InetSocketAddress(port), Collections.singletonList(new org.java_websocket.drafts.Draft_6455(Collections.emptyList(), 128 * 1024 * 1024)));
     }
 
     @Override
@@ -116,9 +122,20 @@ public class RelayWebSocketServer extends WebSocketServer {
                 String size = parts[3];
                 String tokenFromMessage = parts[4];
 
-                long expectedSize = Long.parseLong(parts[3]);
+                long expectedSize = Long.parseLong(size);
                 fileTransferSize.put(transferId, 0L);
                 fileExpectedSize.put(transferId, expectedSize);
+
+                try {
+                    File uploadsDir = new File("uploads");
+                    if (!uploadsDir.exists()) uploadsDir.mkdir();
+                    OutputStream fos = new FileOutputStream(new File(uploadsDir, filename));
+                    activeFileStreams.put(transferId, fos);
+                    activeFileNames.put(transferId, filename);
+                    System.out.println("Opened file stream for transferId=" + transferId + ", file=" + filename);
+                } catch (Exception e) {
+                    System.err.println("Failed to open file stream: " + e.getMessage());
+                }
 
                 String targetToken = tokenPairs.get(senderToken);
                 Set<WebSocket> targets = clients.get(targetToken);
@@ -184,8 +201,23 @@ public class RelayWebSocketServer extends WebSocketServer {
             Long expected = fileExpectedSize.get(transferId);
             System.out.println("FILE_END for transferId=" + transferId + ", total received bytes=" + total +
                     (expected != null ? (", expected=" + expected) : ""));
+
+            OutputStream fos = activeFileStreams.remove(transferId);
+            String fileName = activeFileNames.remove(transferId);
+            if (fos != null) {
+                try {
+                    fos.close();
+                    System.out.println("File saved: " + fileName);
+                } catch (Exception e) {
+                    System.err.println("Error closing file: " + e.getMessage());
+                }
+            } else {
+                System.err.println("No file stream for transferId=" + transferId);
+            }
+
             fileTransferSize.remove(transferId);
             fileExpectedSize.remove(transferId);
+
             String targetToken = tokenPairs.get(senderToken);
             Set<WebSocket> targets = clients.get(targetToken);
             if (targets != null && !targets.isEmpty()) {
@@ -311,31 +343,38 @@ public class RelayWebSocketServer extends WebSocketServer {
 
             if (prefix.startsWith("FILE_DATA:")) {
                 String transferId = prefix.substring("FILE_DATA:".length()).trim();
-                String senderToken = null;
                 int dataLen = duplicate.remaining();
+                String senderToken = null;
                 fileTransferSize.merge(transferId, (long)dataLen, Long::sum);
                 Long expected = fileExpectedSize.get(transferId);
-                System.out.println("Received FILE_DATA for transferId=" + transferId + ", chunk=" + dataLen +
+                System.out.println("Received FILE_DATA for transferId=" + transferId +
+                        ", chunk=" + dataLen +
                         ", total=" + fileTransferSize.get(transferId) +
                         (expected != null ? (", expected=" + expected) : ""));
+                byte[] chunk = new byte[dataLen];
+                duplicate.get(chunk);
+                OutputStream fos = activeFileStreams.get(transferId);
+                if (fos != null) {
+                    fos.write(chunk);
+                } else {
+                    System.err.println("No file stream for transferId=" + transferId + " (chunk dropped!)");
+                }
+
                 for (Map.Entry<String, Set<WebSocket>> entry : clients.entrySet()) {
                     if (entry.getValue().contains(conn)) {
                         senderToken = entry.getKey();
                         break;
                     }
                 }
-                if (senderToken == null) {
-                    System.err.println("Unknown sender for binary message");
-                    return;
-                }
+
                 String targetToken = tokenPairs.get(senderToken);
                 Set<WebSocket> targets = clients.get(targetToken);
                 if (targets != null && !targets.isEmpty()) {
                     for (WebSocket target : targets) {
                         if (target.isOpen()) {
-                            ByteBuffer toSend = ByteBuffer.allocate(prefixBytes.length + duplicate.remaining());
+                            ByteBuffer toSend = ByteBuffer.allocate(prefixBytes.length + chunk.length);
                             toSend.put(prefixBytes);
-                            toSend.put(duplicate);
+                            toSend.put(chunk);
                             toSend.flip();
                             target.send(toSend);
                         }
