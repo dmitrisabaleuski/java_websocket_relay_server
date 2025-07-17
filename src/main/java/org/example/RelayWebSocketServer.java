@@ -236,6 +236,7 @@ public class RelayWebSocketServer extends WebSocketServer {
                     for (WebSocket pairConn : pairConns) {
                         if (pairConn.isOpen()) {
                             pairConn.send("PAIR_DELETED:" + senderToken);
+                            pairConn.send("PAIR_STATUS:NO");
                         }
                     }
                 }
