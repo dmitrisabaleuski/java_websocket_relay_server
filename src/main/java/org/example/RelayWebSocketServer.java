@@ -314,6 +314,14 @@ public class RelayWebSocketServer extends WebSocketServer {
             } else {
                 conn.send("ERROR:Target client not connected");
             }
+        } else if (message.startsWith("IS_PAIRED:")) {
+            String pcToken = message.substring("IS_PAIRED:".length()).trim();
+            String androidToken = tokenPairs.get(pcToken);
+            if (androidToken != null) {
+                conn.send("PAIR_STATUS:YES");
+            } else {
+                conn.send("PAIR_STATUS:NO");
+            }
         } else {
             conn.send("ERROR:Unknown command");
         }
