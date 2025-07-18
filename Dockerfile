@@ -16,4 +16,4 @@ COPY --from=build /app/build/libs/*-all.jar app.jar
 
 EXPOSE 8080
 
-CMD ["java", "-cp", "app.jar", "org.example.UnifiedServer"]
+CMD ["java", "-jar", "app.jar"]

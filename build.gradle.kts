@@ -12,3 +12,13 @@ dependencies {
     implementation("org.json:json:20240303")
     implementation("com.auth0:java-jwt:4.4.0")
 }
+
+tasks {
+    shadowJar {
+        manifest {
+            attributes(
+                "Main-Class" to "org.example.UnifiedServer"
+            )
+        }
+    }
+}
