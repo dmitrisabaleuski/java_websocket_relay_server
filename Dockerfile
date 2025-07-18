@@ -16,4 +16,4 @@ COPY --from=build /app/build/libs/*-all.jar app.jar
 
 EXPOSE 8080
 
-CMD ["java", "-jar", "app.jar"]
+CMD ["java", "-jar", "java_websocket_relay_server-all.jar"]
