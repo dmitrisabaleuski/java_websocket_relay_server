@@ -1,6 +1,6 @@
 plugins {
-    java
     application
+    java
 }
 
 group = "org.example"
@@ -13,10 +13,12 @@ repositories {
 dependencies {
     implementation("org.java-websocket:Java-WebSocket:1.5.3")
     implementation("com.auth0:java-jwt:4.4.0")
+    implementation("com.sparkjava:spark-core:2.9.4")
+    implementation("org.json:json:20240303")
 }
 
 application {
-    mainClass.set("org.example.RelayWebSocketServer")
+    mainClass.set("org.example.Main")
 }
 
 tasks.jar {

@@ -21,6 +21,7 @@ import com.auth0.jwt.JWT;
 import com.auth0.jwt.algorithms.Algorithm;
 import com.auth0.jwt.interfaces.DecodedJWT;
 import com.auth0.jwt.interfaces.JWTVerifier;
+import static org.example.ServerSecret.SECRET;
 
 public class RelayWebSocketServer extends WebSocketServer {
 
@@ -28,7 +29,6 @@ public class RelayWebSocketServer extends WebSocketServer {
     private final Map<String, Set<WebSocket>> clients = new ConcurrentHashMap<>();
     private final Map<WebSocket, Boolean> receivingFile = new ConcurrentHashMap<>();
     private final ScheduledExecutorService pingScheduler = Executors.newSingleThreadScheduledExecutor();
-    private static final String SECRET = "eY9xh9F!j$3Kz0@VqLu7pT1cG2mNwqAr";
 
     private final Map<String, Long> fileTransferSize = new ConcurrentHashMap<>();
     private final Map<String, Long> fileExpectedSize = new ConcurrentHashMap<>();
