@@ -15,7 +15,6 @@ public class TokenHttpServer {
         post("/api/token", (req, res) -> {
             JSONObject json = new JSONObject(req.body());
             String userId = json.optString("userId");
-
             if (isValidUser(userId)) {
                 Algorithm algorithm = Algorithm.HMAC256(SECRET);
                 String token = JWT.create()
@@ -30,10 +29,23 @@ public class TokenHttpServer {
                 return "Unauthorized";
             }
         });
-    }
 
-    // Пока разрешаем всем userId, либо реализуй свою проверку!
-    private static boolean isValidUser(String userId) {
-        return userId != null && !userId.isEmpty();
+        post("/api/login", (req, res) -> {
+            JSONObject json = new JSONObject(req.body());
+            String userId = json.optString("userId");
+            if (isValidUser(userId)) {
+                Algorithm algorithm = Algorithm.HMAC256(SECRET);
+                String token = JWT.create()
+                        .withSubject(userId)
+                        .withIssuedAt(new java.util.Date())
+                        .sign(algorithm);
+                res.status(200);
+                res.type("text/plain");
+                return token;
+            } else {
+                res.status(401);
+                return "Unauthorized";
+            }
+        });
     }
 }
