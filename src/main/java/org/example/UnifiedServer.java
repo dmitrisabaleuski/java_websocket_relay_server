@@ -87,7 +87,27 @@ public class UnifiedServer {
                     sendHttpResponse(ctx, req, new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.NOT_FOUND));
                 }
             } else if (msg instanceof WebSocketFrame) {
-                handleWebSocketFrame(ctx, (WebSocketFrame) msg);
+                WebSocketFrame frame = (WebSocketFrame) msg;
+                if (frame instanceof TextWebSocketFrame) {
+                    String message = ((TextWebSocketFrame) frame).text();
+
+                    if (userId == null) {
+                        if (message.startsWith("AUTH:")) {
+                            String jwt = message.substring("AUTH:".length());
+                            userId = getUserIdFromToken(jwt);
+                            if (userId == null) {
+                                ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Invalid JWT"));
+                                ctx.close();
+                                return;
+                            }
+                            clients.put(userId, ctx.channel());
+                            ctx.channel().writeAndFlush(new TextWebSocketFrame("REGISTERED:" + userId));
+                        } else {
+                            ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Not authenticated. Send AUTH:<jwt> first!"));
+                        }
+                        return;
+                    }
+                }
             }
         }
 
