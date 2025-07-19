@@ -56,7 +56,7 @@ public class UnifiedServer {
                             ChannelPipeline pipeline = ch.pipeline();
                             pipeline.addLast(new HttpServerCodec());
                             pipeline.addLast(new HttpObjectAggregator(64 * 1024 * 1024));
-                            pipeline.addLast(new WebSocketServerProtocolHandler("wss://node-relay-server.onrender.com", null, true, 64 * 1024 * 1024));
+                            pipeline.addLast(new WebSocketServerProtocolHandler("/", null, true, 64 * 1024 * 1024));
                             pipeline.addLast(new ChunkedWriteHandler());
                             pipeline.addLast(new UnifiedServerHandler());
                         }
