@@ -162,33 +162,52 @@ public class UnifiedServer {
 
             if (message.startsWith("FILE_INFO:")) {
                 String[] parts = message.split(":", 5);
+                System.out.println("[SERVER] FILE_INFO получен: " + Arrays.toString(parts));
                 if (parts.length >= 4) {
                     String transferId = parts[1];
                     fileTransferSize.put(transferId, 0L);
                     String filename = parts[2];
                     String size = parts[3];
 
-                    long expectedSize = Long.parseLong(size);
+                    long expectedSize = 0;
+                    try {
+                        expectedSize = Long.parseLong(size);
+                    } catch (NumberFormatException nfe) {
+                        System.err.println("[SERVER] Ошибка парсинга размера: " + size);
+                    }
                     fileExpectedSize.put(transferId, expectedSize);
+
+                    System.out.println("[SERVER] Start transfer: transferId=" + transferId +
+                            ", filename=" + filename +
+                            ", expectedSize=" + expectedSize);
 
                     try {
                         File uploadsDir = new File(UPLOADS_DIR);
-                        if (!uploadsDir.exists()) uploadsDir.mkdirs();
-                        OutputStream fos = new FileOutputStream(new File(uploadsDir, filename));
+                        if (!uploadsDir.exists()) {
+                            boolean created = uploadsDir.mkdirs();
+                            System.out.println("[SERVER] uploadsDir создан: " + uploadsDir.getAbsolutePath() + " = " + created);
+                        }
+                        File outFile = new File(uploadsDir, filename);
+                        OutputStream fos = new FileOutputStream(outFile);
                         activeFileStreams.put(transferId, fos);
                         activeFileNames.put(transferId, filename);
+                        System.out.println("[SERVER] Открыт поток для файла: " + outFile.getAbsolutePath());
                     } catch (Exception e) {
-                        System.err.println("Failed to open file stream: " + e.getMessage());
+                        System.err.println("[SERVER] Failed to open file stream: " + e.getMessage());
+                        e.printStackTrace();
                     }
 
                     String targetToken = tokenPairs.get(senderToken);
                     Channel target = clients.get(targetToken);
                     if (target != null && target.isActive()) {
+                        System.out.println("[SERVER] Ретрансляция FILE_INFO на " + targetToken);
                         target.writeAndFlush(new TextWebSocketFrame(message));
                     } else {
+                        System.err.println("[SERVER] Target not connected: " + targetToken);
                         ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target not connected"));
                     }
                 } else {
+                    System.err.println("[SERVER] Invalid FILE_INFO format: " + message);
                     ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Invalid FILE_INFO format"));
                 }
             } else if (message.startsWith("REGISTER_PAIR:")) {
