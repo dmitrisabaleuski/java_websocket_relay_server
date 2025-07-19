@@ -18,7 +18,6 @@ import io.netty.util.CharsetUtil;
 import org.json.JSONObject;
 
 import java.io.*;
-import io.netty.channel.Channel;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -322,30 +321,38 @@ public class UnifiedServer {
         private void handleBinaryMessage(ChannelHandlerContext ctx, BinaryWebSocketFrame frame) {
             ByteBuf buffer = frame.content();
             buffer = buffer.retainedDuplicate();
+
+            // Правильная обработка binary frame
+            if (buffer.readableBytes() < 64) {
+                System.err.println("Binary frame too short for FILE_DATA prefix");
+                buffer.release();
+                return;
+            }
             byte[] prefixBytes = new byte[64];
             buffer.readBytes(prefixBytes);
             String prefix = new String(prefixBytes, StandardCharsets.UTF_8).trim();
 
             if (prefix.startsWith("FILE_DATA:")) {
                 String transferId = prefix.substring("FILE_DATA:".length()).trim();
-                int dataLen = buffer.readableBytes();
-                fileTransferSize.merge(transferId, (long)dataLen, Long::sum);
 
+                int dataLen = buffer.readableBytes();
                 byte[] chunk = new byte[dataLen];
-                int chunkSize = chunk.length;
                 buffer.readBytes(chunk);
+
                 long prev = fileTransferSize.getOrDefault(transferId, 0L);
-                fileTransferSize.put(transferId, prev + chunkSize);
+                fileTransferSize.put(transferId, prev + chunk.length);
+
                 OutputStream fos = activeFileStreams.get(transferId);
                 if (fos != null) {
                     try {
                         fos.write(chunk);
+                        fos.flush();
                     } catch (IOException e) {
                         System.err.println("File write error: " + e.getMessage());
                     }
                 }
                 System.out.println("[SERVER] Получен FILE_DATA: transferId=" + transferId +
-                        ", chunk=" + chunkSize + " байт, всего принято: " + (prev + chunkSize));
+                        ", chunk=" + chunk.length + " байт, всего принято: " + (prev + chunk.length));
                 String senderToken = userId;
                 String targetToken = tokenPairs.get(senderToken);
                 Channel target = clients.get(targetToken);
