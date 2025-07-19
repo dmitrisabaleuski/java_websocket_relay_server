@@ -25,7 +25,6 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import static io.netty.handler.codec.http.HttpHeaderNames.*;
 import static io.netty.handler.codec.http.HttpHeaderValues.*;
-import static java.util.jar.Attributes.Name.CONTENT_TYPE;
 
 public class UnifiedServer {
 
