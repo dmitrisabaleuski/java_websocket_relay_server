@@ -28,7 +28,8 @@ import static io.netty.handler.codec.http.HttpHeaderValues.*;
 
 public class UnifiedServer {
 
-    private static final String SECRET = "eY9xh9F!j$3Kz0@VqLu7pT1cG2mNwqAr";
+    private static final String SECRET = System.getenv().getOrDefault("JWT_SECRET", "eY9xh9F!j$3Kz0@VqLu7pT1cG2mNwqAr");
+    private static final String UPLOADS_DIR = System.getenv().getOrDefault("UPLOADS_DIR", "uploads");
 
     private static final Map<String, String> tokenPairs = new ConcurrentHashMap<>();
     private static final Map<String, Channel> clients = new ConcurrentHashMap<>();
@@ -39,6 +40,9 @@ public class UnifiedServer {
 
     public static void main(String[] args) throws Exception {
         int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "8080"));
+        File uploads = new File(UPLOADS_DIR);
+        if (!uploads.exists()) uploads.mkdirs();
+
         EventLoopGroup bossGroup = new NioEventLoopGroup(1);
         EventLoopGroup workerGroup = new NioEventLoopGroup();
         try {
@@ -76,6 +80,8 @@ public class UnifiedServer {
                     handleTokenRequest(ctx, req);
                 } else if ("websocket".equalsIgnoreCase(req.headers().get("Upgrade"))) {
                     handleWebSocketHandshake(ctx, req);
+                } else if ("/health".equalsIgnoreCase(req.uri()) && req.method() == HttpMethod.GET) {
+                    sendHttpResponse(ctx, req, new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK));
                 } else {
                     sendHttpResponse(ctx, req, new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.NOT_FOUND));
                 }
@@ -113,7 +119,7 @@ public class UnifiedServer {
             WebSocketServerHandshakerFactory wsFactory = new WebSocketServerHandshakerFactory(wsUrl, null, true);
             handshaker = wsFactory.newHandshaker(req);
 
-            // JWT-проверка
+            // JWT check
             String authHeader = req.headers().get("Authorization");
             if (authHeader == null || !authHeader.startsWith("Bearer ")) {
                 ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Missing or invalid Authorization header"));
@@ -123,7 +129,7 @@ public class UnifiedServer {
             String jwtToken = authHeader.substring("Bearer ".length());
             try {
                 Algorithm algorithm = Algorithm.HMAC256(SECRET);
-                userId = com.auth0.jwt.JWT.require(algorithm).acceptLeeway(60).build().verify(jwtToken).getSubject();
+                userId = JWT.require(algorithm).acceptLeeway(60).build().verify(jwtToken).getSubject();
                 clients.put(userId, ctx.channel());
                 ctx.channel().writeAndFlush(new TextWebSocketFrame("REGISTERED:" + userId));
             } catch (Exception e) {
@@ -134,6 +140,9 @@ public class UnifiedServer {
 
             if (handshaker != null) {
                 handshaker.handshake(ctx.channel(), req);
+            } else {
+                ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:WebSocket handshake failed"));
+                ctx.close();
             }
         }
 
@@ -163,8 +172,8 @@ public class UnifiedServer {
                     fileExpectedSize.put(transferId, expectedSize);
 
                     try {
-                        File uploadsDir = new File("uploads");
-                        if (!uploadsDir.exists()) uploadsDir.mkdir();
+                        File uploadsDir = new File(UPLOADS_DIR);
+                        if (!uploadsDir.exists()) uploadsDir.mkdirs();
                         OutputStream fos = new FileOutputStream(new File(uploadsDir, filename));
                         activeFileStreams.put(transferId, fos);
                         activeFileNames.put(transferId, filename);
@@ -328,7 +337,7 @@ public class UnifiedServer {
         private String getUserIdFromToken(String jwtToken) {
             try {
                 Algorithm algorithm = Algorithm.HMAC256(SECRET);
-                return com.auth0.jwt.JWT.require(algorithm).acceptLeeway(60).build().verify(jwtToken).getSubject();
+                return JWT.require(algorithm).acceptLeeway(60).build().verify(jwtToken).getSubject();
             } catch (Exception e) {
                 return null;
             }
