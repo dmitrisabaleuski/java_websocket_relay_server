@@ -161,6 +161,12 @@ public class UnifiedServer {
         private void handleTextMessage(ChannelHandlerContext ctx, String message) {
             String senderToken = userId;
 
+            if (userId == null) {
+                System.err.println("[SERVER] ERROR: userId is null! message=" + message);
+                ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR: Not authenticated (userId null)"));
+                return;
+            }
+
             if (message.startsWith("FILE_INFO:")) {
                 String[] parts = message.split(":", 5);
                 if (parts.length >= 4) {
@@ -183,7 +189,15 @@ public class UnifiedServer {
                     }
 
                     String targetToken = tokenPairs.get(senderToken);
+                    if (targetToken == null) {
+                        ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target not connected"));
+                        return;
+                    }
                     Channel target = clients.get(targetToken);
+                    if (target == null || !target.isActive()) {
+                        ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target client not connected"));
+                        return;
+                    }
                     if (target != null && target.isActive()) {
                         target.writeAndFlush(new TextWebSocketFrame(message));
                     } else {
@@ -208,7 +222,7 @@ public class UnifiedServer {
 
                     Channel androidCh = clients.get(androidUserId);
                     Channel pcCh = clients.get(pcUserId);
-
+                    System.err.println("IS TOKENS EXIST: ANDROID" + androidToken + " PC: " + pcToken + " PART: " + parts);
                     if (androidCh != null) androidCh.writeAndFlush(new TextWebSocketFrame("PAIR_REGISTERED:" + pcUserId));
                     if (pcCh != null) pcCh.writeAndFlush(new TextWebSocketFrame("PAIR_REGISTERED:" + androidUserId));
                 } else {
@@ -232,7 +246,15 @@ public class UnifiedServer {
                 fileExpectedSize.remove(transferId);
 
                 String targetToken = tokenPairs.get(senderToken);
+                if (targetToken == null) {
+                    ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target not connected"));
+                    return;
+                }
                 Channel target = clients.get(targetToken);
+                if (target == null || !target.isActive()) {
+                    ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target client not connected"));
+                    return;
+                }
                 if (target != null && target.isActive()) {
                     target.writeAndFlush(new TextWebSocketFrame("FILE_END:" + transferId));
                 }
@@ -253,14 +275,30 @@ public class UnifiedServer {
                 String[] parts = message.split(":", 2);
                 String transferId = parts[1];
                 String targetToken = tokenPairs.get(senderToken);
+                if (targetToken == null) {
+                    ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target not connected"));
+                    return;
+                }
                 Channel target = clients.get(targetToken);
+                if (target == null || !target.isActive()) {
+                    ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target client not connected"));
+                    return;
+                }
                 if (target != null && target.isActive()) {
                     target.writeAndFlush(new TextWebSocketFrame("FILE_RECEIVED:" + transferId));
                 }
             } else if (message.startsWith("FILE_LIST:")) {
                 String fileListJson = message.substring("FILE_LIST:".length());
                 String targetToken = tokenPairs.get(senderToken);
+                if (targetToken == null) {
+                    ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target not connected"));
+                    return;
+                }
                 Channel target = clients.get(targetToken);
+                if (target == null || !target.isActive()) {
+                    ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target client not connected"));
+                    return;
+                }
                 if (target != null && target.isActive()) {
                     target.writeAndFlush(new TextWebSocketFrame("FILE_LIST:" + fileListJson));
                 } else {
@@ -269,7 +307,15 @@ public class UnifiedServer {
             } else if (message.startsWith("DELETE_FILE:")) {
                 String fileId = message.substring("DELETE_FILE:".length());
                 String targetToken = tokenPairs.get(senderToken);
+                if (targetToken == null) {
+                    ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target not connected"));
+                    return;
+                }
                 Channel target = clients.get(targetToken);
+                if (target == null || !target.isActive()) {
+                    ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target client not connected"));
+                    return;
+                }
                 if (target != null && target.isActive()) {
                     target.writeAndFlush(new TextWebSocketFrame("DELETE_FILE:" + fileId));
                 } else {
@@ -277,7 +323,15 @@ public class UnifiedServer {
                 }
             } else if (message.equals("GET_FILES")) {
                 String targetToken = tokenPairs.get(senderToken);
+                if (targetToken == null) {
+                    ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target not connected"));
+                    return;
+                }
                 Channel target = clients.get(targetToken);
+                if (target == null || !target.isActive()) {
+                    ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target client not connected"));
+                    return;
+                }
                 if (target != null && target.isActive()) {
                     target.writeAndFlush(new TextWebSocketFrame("GET_FILES"));
                 } else {
@@ -322,7 +376,15 @@ public class UnifiedServer {
 
                 String senderToken = userId;
                 String targetToken = tokenPairs.get(senderToken);
+                if (targetToken == null) {
+                    ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target not connected"));
+                    return;
+                }
                 Channel target = clients.get(targetToken);
+                if (target == null || !target.isActive()) {
+                    ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target client not connected"));
+                    return;
+                }
                 if (target != null && target.isActive()) {
                     ByteBuf toSend = Unpooled.buffer(prefixBytes.length + chunk.length);
                     toSend.writeBytes(prefixBytes);
