@@ -25,6 +25,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import static io.netty.handler.codec.http.HttpHeaderNames.*;
 import static io.netty.handler.codec.http.HttpHeaderValues.*;
+import static java.util.jar.Attributes.Name.CONTENT_TYPE;
 
 public class UnifiedServer {
 
@@ -56,6 +57,7 @@ public class UnifiedServer {
                             ChannelPipeline pipeline = ch.pipeline();
                             pipeline.addLast(new HttpServerCodec());
                             pipeline.addLast(new HttpObjectAggregator(64 * 1024 * 1024));
+                            pipeline.addLast(new WebSocketServerProtocolHandler("/", null, true, 64 * 1024 * 1024));
                             pipeline.addLast(new ChunkedWriteHandler());
                             pipeline.addLast(new UnifiedServerHandler());
                         }
