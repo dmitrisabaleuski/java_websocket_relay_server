@@ -162,7 +162,8 @@ public class UnifiedServer {
 
             if (message.startsWith("FILE_INFO:")) {
                 String[] parts = message.split(":", 5);
-                System.out.println("[SERVER] FILE_INFO получен: " + Arrays.toString(parts));
+                System.out.println("[SERVER][FILE_INFO] Получено сообщение: " + message);
+                System.out.println("[SERVER][FILE_INFO] Парсинг частей: " + Arrays.toString(parts));
                 if (parts.length >= 4) {
                     String transferId = parts[1];
                     fileTransferSize.put(transferId, 0L);
@@ -172,8 +173,9 @@ public class UnifiedServer {
                     long expectedSize = 0;
                     try {
                         expectedSize = Long.parseLong(size);
+                        System.out.println("[SERVER][FILE_INFO] Парсинг размера успешно: " + expectedSize);
                     } catch (NumberFormatException nfe) {
-                        System.err.println("[SERVER] Ошибка парсинга размера: " + size);
+                        System.err.println("[SERVER][FILE_INFO][ERROR] Ошибка парсинга размера: " + size);
                     }
                     fileExpectedSize.put(transferId, expectedSize);
 
@@ -238,6 +240,9 @@ public class UnifiedServer {
 
                 OutputStream fos = activeFileStreams.remove(transferId);
                 String fileName = activeFileNames.remove(transferId);
+                long received = fileTransferSize.getOrDefault(transferId, 0L);
+                long expected = fileExpectedSize.getOrDefault(transferId, 0L);
+                System.out.println("[SERVER] FILE_END для transferId=" + transferId + ", получено: " + received + ", ожидалось: " + expected);
                 if (fos != null) {
                     try {
                         fos.close();
@@ -327,8 +332,10 @@ public class UnifiedServer {
                 fileTransferSize.merge(transferId, (long)dataLen, Long::sum);
 
                 byte[] chunk = new byte[dataLen];
+                int chunkSize = chunk.length;
                 buffer.readBytes(chunk);
-
+                long prev = fileTransferSize.getOrDefault(transferId, 0L);
+                fileTransferSize.put(transferId, prev + chunkSize);
                 OutputStream fos = activeFileStreams.get(transferId);
                 if (fos != null) {
                     try {
@@ -337,7 +344,8 @@ public class UnifiedServer {
                         System.err.println("File write error: " + e.getMessage());
                     }
                 }
-
+                System.out.println("[SERVER] Получен FILE_DATA: transferId=" + transferId +
+                        ", chunk=" + chunkSize + " байт, всего принято: " + (prev + chunkSize));
                 String senderToken = userId;
                 String targetToken = tokenPairs.get(senderToken);
                 Channel target = clients.get(targetToken);
