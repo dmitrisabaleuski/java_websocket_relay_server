@@ -7,7 +7,7 @@ COPY gradle ./gradle
 COPY gradlew ./
 RUN chmod +x ./gradlew
 COPY src ./src
-RUN ./gradlew build --no-daemon
+RUN ./gradlew shadowJar --no-daemon
 
 # Runtime stage
 FROM eclipse-temurin:21-jre
