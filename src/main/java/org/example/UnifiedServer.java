@@ -49,7 +49,6 @@ public class UnifiedServer {
             ServerBootstrap b = new ServerBootstrap();
             b.group(bossGroup, workerGroup)
                     .channel(NioServerSocketChannel.class)
-                    .handler(new LoggingHandler(LogLevel.INFO))
                     .childHandler(new ChannelInitializer<SocketChannel>() {
                         @Override
                         protected void initChannel(SocketChannel ch) {
@@ -95,8 +94,10 @@ public class UnifiedServer {
                             String jwt = message.substring("AUTH:".length());
                             userId = getUserIdFromToken(jwt);
                             if (userId == null) {
-                                ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Invalid JWT"));
-                                ctx.close();
+                                clients.put(userId, ctx.channel());
+                                ctx.channel().writeAndFlush(new TextWebSocketFrame("REGISTERED:" + userId));
+                                System.out.println("[SERVER] Client connected: userId=" + userId +
+                                        ", remote=" + ctx.channel().remoteAddress());
                                 return;
                             }
                             clients.put(userId, ctx.channel());
