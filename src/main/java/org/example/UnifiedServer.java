@@ -92,6 +92,7 @@ public class UnifiedServer {
                     if (userId == null) {
                         if (message.startsWith("AUTH:")) {
                             String jwt = message.substring("AUTH:".length());
+                            System.out.println("[SERVER] Received AUTH: " + jwt);
                             userId = getUserIdFromToken(jwt);
                             if (userId == null) {
                                 clients.put(userId, ctx.channel());
@@ -198,6 +199,8 @@ public class UnifiedServer {
 
             if (message.startsWith("FILE_INFO:")) {
                 String[] parts = message.split(":", 5);
+                System.out.println("[FILE_INFO] parts: " + parts);
+                System.out.println("[FILE_INFO] parts.length: " + parts.length);
                 if (parts.length >= 4) {
                     String transferId = parts[1];
                     fileTransferSize.put(transferId, 0L);
@@ -206,24 +209,28 @@ public class UnifiedServer {
 
                     long expectedSize = Long.parseLong(size);
                     fileExpectedSize.put(transferId, expectedSize);
-
+                    System.out.println("[SERVER] Start file transfer: transferId=" + transferId +
+                            ", filename=" + filename + ", expectedSize=" + expectedSize);
                     try {
                         File uploadsDir = new File(UPLOADS_DIR);
                         if (!uploadsDir.exists()) uploadsDir.mkdirs();
                         OutputStream fos = new FileOutputStream(new File(uploadsDir, filename));
                         activeFileStreams.put(transferId, fos);
                         activeFileNames.put(transferId, filename);
+                        System.out.println("[SERVER] File stream opened for: " + filename);
                     } catch (Exception e) {
                         System.err.println("Failed to open file stream: " + e.getMessage());
                     }
 
                     String targetToken = tokenPairs.get(senderToken);
                     if (targetToken == null) {
+                        System.err.println("[SERVER] Target token not found for senderToken: " + senderToken);
                         ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target not connected"));
                         return;
                     }
                     Channel target = clients.get(targetToken);
                     if (target == null || !target.isActive()) {
+                        System.err.println("[SERVER] Target channel not active for token: " + targetToken);
                         ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target client not connected"));
                         return;
                     }
@@ -233,6 +240,7 @@ public class UnifiedServer {
                         ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target not connected"));
                     }
                 } else {
+                    System.err.println("[SERVER] Invalid FILE_INFO format: " + message);
                     ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Invalid FILE_INFO format"));
                 }
             } else if (message.startsWith("REGISTER_PAIR:")) {
@@ -388,6 +396,7 @@ public class UnifiedServer {
 
             if (prefix.startsWith("FILE_DATA:")) {
                 String transferId = prefix.substring("FILE_DATA:".length()).trim();
+                System.out.println("[FILE_DATA]: transferId= " + transferId);
                 int dataLen = buffer.readableBytes();
                 fileTransferSize.merge(transferId, (long)dataLen, Long::sum);
 
@@ -395,17 +404,24 @@ public class UnifiedServer {
                 buffer.readBytes(chunk);
 
                 OutputStream fos = activeFileStreams.get(transferId);
+                System.out.println("[FILE_DATA]: fos= " + fos);
                 if (fos != null) {
                     try {
                         fos.write(chunk);
+                        long totalReceived = fileTransferSize.getOrDefault(transferId, 0L);
+                        System.out.println("[SERVER] FILE_DATA: transferId=" + transferId +
+                                ", chunkSize=" + chunk.length + ", totalReceived=" + totalReceived);
                     } catch (IOException e) {
                         System.err.println("File write error: " + e.getMessage());
                     }
+                } else {
+                    System.err.println("[SERVER] No file stream for transferId " + transferId);
                 }
 
                 String senderToken = userId;
                 String targetToken = tokenPairs.get(senderToken);
                 if (targetToken == null) {
+                    System.err.println("[SERVER] Target token not found for senderToken: " + senderToken);
                     ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target not connected"));
                     return;
                 }
@@ -419,6 +435,8 @@ public class UnifiedServer {
                     toSend.writeBytes(prefixBytes);
                     toSend.writeBytes(chunk);
                     target.writeAndFlush(new BinaryWebSocketFrame(toSend));
+                    System.out.println("[SERVER] Forwarded FILE_DATA chunk to target client: " + targetToken +
+                            ", transferId=" + transferId + ", size=" + chunk.length);
                 }
             } else {
                 System.err.println("Unknown binary prefix received on server: " + prefix);
@@ -451,7 +469,12 @@ public class UnifiedServer {
                     break;
                 }
             }
-            if (toRemove != null) clients.remove(toRemove);
+            if (toRemove != null) {
+                clients.remove(toRemove);
+                System.out.println("[SERVER] Removed client: " + toRemove);
+            }else {
+                System.out.println("[SERVER] handlerRemoved: couldn't find channel " + ctx.channel().id());
+            }
         }
 
         @Override
