@@ -105,8 +105,15 @@ public class UnifiedServer {
                         } else {
                             ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Not authenticated. Send AUTH:<jwt> first!"));
                         }
+                        handleTextMessage(ctx, message);
                         return;
                     }
+                }
+
+                if (frame instanceof BinaryWebSocketFrame) {
+                    handleBinaryMessage(ctx, (BinaryWebSocketFrame) frame);
+                } else if (frame instanceof CloseWebSocketFrame) {
+                    ctx.channel().close();
                 }
             }
         }
