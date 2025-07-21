@@ -37,6 +37,7 @@ public class UnifiedServer {
     private static final Map<String, Long> fileExpectedSize = new ConcurrentHashMap<>();
     private static final Map<String, OutputStream> activeFileStreams = new ConcurrentHashMap<>();
     private static final Map<String, String> activeFileNames = new ConcurrentHashMap<>();
+    private final Map<String, ByteArrayOutputStream> fileBuffers = new ConcurrentHashMap<>();
 
     public static void main(String[] args) throws Exception {
         int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "8080"));
@@ -56,6 +57,7 @@ public class UnifiedServer {
                             pipeline.addLast(new HttpServerCodec());
                             pipeline.addLast(new HttpObjectAggregator(64 * 1024 * 1024));
                             pipeline.addLast(new WebSocketServerProtocolHandler("/", null, true, 64 * 1024 * 1024));
+                            pipeline.addLast(new WebSocketFrameAggregator(64 * 1024 * 1024));
                             pipeline.addLast(new ChunkedWriteHandler());
                             pipeline.addLast(new UnifiedServerHandler());
                         }
@@ -399,8 +401,6 @@ public class UnifiedServer {
                 String transferId = prefix.substring("FILE_DATA:".length()).trim();
                 System.out.println("[FILE_DATA]: transferId= " + transferId);
                 int dataLen = buffer.readableBytes();
-                fileTransferSize.merge(transferId, (long)dataLen, Long::sum);
-
                 byte[] chunk = new byte[dataLen];
                 buffer.readBytes(chunk);
 
