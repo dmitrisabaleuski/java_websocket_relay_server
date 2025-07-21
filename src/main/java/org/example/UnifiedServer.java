@@ -143,7 +143,7 @@ public class UnifiedServer {
         }
 
         private void handleWebSocketHandshake(ChannelHandlerContext ctx, FullHttpRequest req) {
-            String wsUrl = "wss://" + req.headers().get(HOST) + req.uri();
+            String wsUrl = "ws://" + req.headers().get(HOST) + req.uri();
             System.err.println("handleWebSocketHandshake URI" + wsUrl );
             WebSocketServerHandshakerFactory wsFactory = new WebSocketServerHandshakerFactory(wsUrl, null, true);
             handshaker = wsFactory.newHandshaker(req);
