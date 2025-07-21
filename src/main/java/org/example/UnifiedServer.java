@@ -388,6 +388,7 @@ public class UnifiedServer {
         }
 
         private void handleBinaryMessage(ChannelHandlerContext ctx, BinaryWebSocketFrame frame) {
+            System.out.println("[SERVER] BinaryWebSocketFrame received. Total size: " + frame.content().readableBytes());
             ByteBuf buffer = frame.content();
             buffer = buffer.retainedDuplicate();
             byte[] prefixBytes = new byte[64];
