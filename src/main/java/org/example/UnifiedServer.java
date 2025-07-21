@@ -90,7 +90,6 @@ public class UnifiedServer {
                 WebSocketFrame frame = (WebSocketFrame) msg;
                 if (frame instanceof TextWebSocketFrame) {
                     String message = ((TextWebSocketFrame) frame).text();
-
                     if (userId == null) {
                         if (message.startsWith("AUTH:")) {
                             String jwt = message.substring("AUTH:".length());
@@ -102,14 +101,15 @@ public class UnifiedServer {
                             }
                             clients.put(userId, ctx.channel());
                             ctx.channel().writeAndFlush(new TextWebSocketFrame("REGISTERED:" + userId));
+                            return;
                         } else {
                             ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Not authenticated. Send AUTH:<jwt> first!"));
+                            return;
                         }
-                        handleTextMessage(ctx, message);
-                        return;
                     }
+                    handleTextMessage(ctx, message);
+                    return;
                 }
-
                 if (frame instanceof BinaryWebSocketFrame) {
                     handleBinaryMessage(ctx, (BinaryWebSocketFrame) frame);
                 } else if (frame instanceof CloseWebSocketFrame) {
@@ -143,7 +143,8 @@ public class UnifiedServer {
         }
 
         private void handleWebSocketHandshake(ChannelHandlerContext ctx, FullHttpRequest req) {
-            String wsUrl = "ws://" + req.headers().get(HOST) + req.uri();
+            String wsUrl = "wss://" + req.headers().get(HOST) + req.uri();
+            System.err.println("handleWebSocketHandshake URI" + wsUrl );
             WebSocketServerHandshakerFactory wsFactory = new WebSocketServerHandshakerFactory(wsUrl, null, true);
             handshaker = wsFactory.newHandshaker(req);
 
