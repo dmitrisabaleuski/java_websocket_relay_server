@@ -297,6 +297,8 @@ public class UnifiedServer {
                 if (target != null && target.isActive()) {
                     target.writeAndFlush(new TextWebSocketFrame("FILE_END:" + transferId));
                 }
+
+                ctx.channel().writeAndFlush(new TextWebSocketFrame("FILE_RECEIVED:" + transferId));
             } else if (message.equals("DELETE_PAIRING")) {
                 String pairToken = tokenPairs.remove(senderToken);
                 if (pairToken != null) {
