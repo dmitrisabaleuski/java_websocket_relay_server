@@ -11,8 +11,6 @@ import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.codec.http.*;
 import io.netty.handler.codec.http.websocketx.*;
-import io.netty.handler.logging.LoggingHandler;
-import io.netty.handler.logging.LogLevel;
 import io.netty.handler.stream.ChunkedWriteHandler;
 import io.netty.util.CharsetUtil;
 import org.json.JSONObject;
@@ -24,7 +22,6 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 import static io.netty.handler.codec.http.HttpHeaderNames.*;
-import static io.netty.handler.codec.http.HttpHeaderValues.*;
 
 public class UnifiedServer {
 
@@ -38,6 +35,7 @@ public class UnifiedServer {
     private static final Map<String, OutputStream> activeFileStreams = new ConcurrentHashMap<>();
     private static final Map<String, String> activeFileNames = new ConcurrentHashMap<>();
     private final Map<String, ByteArrayOutputStream> fileBuffers = new ConcurrentHashMap<>();
+    private static final int MAX_ACTIVE_TRANSFERS = 8;
 
     public static void main(String[] args) throws Exception {
         int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "8080"));
@@ -200,6 +198,10 @@ public class UnifiedServer {
             }
 
             if (message.startsWith("FILE_INFO:")) {
+                if (activeFileStreams.size() >= MAX_ACTIVE_TRANSFERS) {
+                    ctx.channel().writeAndFlush(new TextWebSocketFrame("BUSY:MAX_TRANSFERS"));
+                    return;
+                }
                 String[] parts = message.split(":", 5);
                 System.out.println("[FILE_INFO] parts: " + parts);
                 System.out.println("[FILE_INFO] parts.length: " + parts.length);
@@ -241,10 +243,12 @@ public class UnifiedServer {
                     } else {
                         ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target not connected"));
                     }
+                    ctx.channel().writeAndFlush(new TextWebSocketFrame("OK:READY:" + transferId));
                 } else {
                     System.err.println("[SERVER] Invalid FILE_INFO format: " + message);
                     ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Invalid FILE_INFO format"));
                 }
+
             } else if (message.startsWith("REGISTER_PAIR:")) {
                 String[] parts = message.split(":", 3);
                 if (parts.length == 3) {
@@ -299,6 +303,8 @@ public class UnifiedServer {
                 }
 
                 ctx.channel().writeAndFlush(new TextWebSocketFrame("FILE_RECEIVED:" + transferId));
+                System.out.println("[SERVER] SLOT_FREE: " + transferId);
+                ctx.channel().writeAndFlush(new TextWebSocketFrame("SLOT_FREE"));
             } else if (message.equals("DELETE_PAIRING")) {
                 String pairToken = tokenPairs.remove(senderToken);
                 if (pairToken != null) {
