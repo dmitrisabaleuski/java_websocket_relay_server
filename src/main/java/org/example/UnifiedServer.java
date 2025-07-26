@@ -60,7 +60,9 @@ public class UnifiedServer {
                             pipeline.addLast(new UnifiedServerHandler());
                         }
                     });
-            System.out.println("Unified Netty server started on port " + port);
+
+            System.out.println("[SERVER] Netty server started on port " + port);
+
             b.bind(port).sync().channel().closeFuture().sync();
         } finally {
             bossGroup.shutdownGracefully();
@@ -92,7 +94,9 @@ public class UnifiedServer {
                     if (userId == null) {
                         if (message.startsWith("AUTH:")) {
                             String jwt = message.substring("AUTH:".length());
-                            System.out.println("[SERVER] Received AUTH: " + jwt);
+
+                            System.out.println("[AUTH] Received AUTH for JWT: " + jwt);
+
                             userId = getUserIdFromToken(jwt);
                             if (userId == null) {
                                 clients.put(userId, ctx.channel());
@@ -103,9 +107,16 @@ public class UnifiedServer {
                             }
                             clients.put(userId, ctx.channel());
                             ctx.channel().writeAndFlush(new TextWebSocketFrame("REGISTERED:" + userId));
+
+                            System.out.println("[AUTH] Client registered: userId=" + userId + ", remote=" + ctx.channel().remoteAddress());
+
                             return;
                         } else {
-                            ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Not authenticated. Send AUTH:<jwt> first!"));
+
+                            System.err.println("[AUTH] Invalid JWT, userId=null");
+
+                            ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Invalid JWT"));
+                            ctx.close();
                             return;
                         }
                     }
@@ -115,6 +126,9 @@ public class UnifiedServer {
                 if (frame instanceof BinaryWebSocketFrame) {
                     handleBinaryMessage(ctx, (BinaryWebSocketFrame) frame);
                 } else if (frame instanceof CloseWebSocketFrame) {
+
+                    System.out.println("[SERVER] Client requested close: userId=" + userId);
+
                     ctx.channel().close();
                 }
             }
@@ -126,6 +140,9 @@ public class UnifiedServer {
                 JSONObject json = new JSONObject(body);
                 String userId = json.optString("userId");
                 if (userId == null || userId.isEmpty()) {
+
+                    System.err.println("[TOKEN] Unauthorized token request, userId missing");
+
                     sendHttpResponse(ctx, req, new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.UNAUTHORIZED));
                     return;
                 }
@@ -138,21 +155,32 @@ public class UnifiedServer {
                 FullHttpResponse resp = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK, content);
                 resp.headers().set(CONTENT_TYPE, "text/plain");
                 resp.headers().setInt(CONTENT_LENGTH, content.readableBytes());
+
+                System.out.println("[TOKEN] Issued JWT for userId=" + userId);
+
                 sendHttpResponse(ctx, req, resp);
             } catch (Exception e) {
+
+                System.err.println("[TOKEN] Failed to issue JWT: " + e.getMessage());
+
                 sendHttpResponse(ctx, req, new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.INTERNAL_SERVER_ERROR));
             }
         }
 
         private void handleWebSocketHandshake(ChannelHandlerContext ctx, FullHttpRequest req) {
             String wsUrl = "ws://" + req.headers().get(HOST) + req.uri();
-            System.err.println("handleWebSocketHandshake URI" + wsUrl );
+
+            System.out.println("[WS] Handshake URI: " + wsUrl);
+
             WebSocketServerHandshakerFactory wsFactory = new WebSocketServerHandshakerFactory(wsUrl, null, true);
             handshaker = wsFactory.newHandshaker(req);
 
             // JWT check
             String authHeader = req.headers().get("Authorization");
             if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+
+                System.err.println("[WS] Missing or invalid Authorization header");
+
                 ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Missing or invalid Authorization header"));
                 ctx.close();
                 return;
@@ -161,9 +189,15 @@ public class UnifiedServer {
             try {
                 Algorithm algorithm = Algorithm.HMAC256(SECRET);
                 userId = JWT.require(algorithm).acceptLeeway(60).build().verify(jwtToken).getSubject();
+
+                System.out.println("[WS] Authenticated userId=" + userId);
+
                 clients.put(userId, ctx.channel());
                 ctx.channel().writeAndFlush(new TextWebSocketFrame("REGISTERED:" + userId));
             } catch (Exception e) {
+
+                System.err.println("[WS] Invalid JWT token: " + e.getMessage());
+
                 ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Invalid JWT token"));
                 ctx.close();
                 return;
@@ -172,19 +206,11 @@ public class UnifiedServer {
             if (handshaker != null) {
                 handshaker.handshake(ctx.channel(), req);
             } else {
+
+                System.err.println("[WS] WebSocket handshake failed");
+
                 ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:WebSocket handshake failed"));
                 ctx.close();
-            }
-        }
-
-        private void handleWebSocketFrame(ChannelHandlerContext ctx, WebSocketFrame frame) {
-            if (frame instanceof TextWebSocketFrame) {
-                String msg = ((TextWebSocketFrame) frame).text();
-                handleTextMessage(ctx, msg);
-            } else if (frame instanceof BinaryWebSocketFrame) {
-                handleBinaryMessage(ctx, (BinaryWebSocketFrame) frame);
-            } else if (frame instanceof CloseWebSocketFrame) {
-                ctx.channel().close();
             }
         }
 
@@ -192,13 +218,18 @@ public class UnifiedServer {
             String senderToken = userId;
 
             if (userId == null) {
+
                 System.err.println("[SERVER] ERROR: userId is null! message=" + message);
+
                 ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR: Not authenticated (userId null)"));
                 return;
             }
 
             if (message.startsWith("FILE_INFO:")) {
                 if (activeFileStreams.size() >= MAX_ACTIVE_TRANSFERS) {
+
+                    System.err.println("[TRANSFER] BUSY:MAX_TRANSFERS for sender=" + senderToken);
+
                     ctx.channel().writeAndFlush(new TextWebSocketFrame("BUSY:MAX_TRANSFERS"));
                     return;
                 }
@@ -212,18 +243,26 @@ public class UnifiedServer {
                     String size = parts[3];
 
                     long expectedSize = Long.parseLong(size);
+
+                    fileTransferSize.put(transferId, 0L);
                     fileExpectedSize.put(transferId, expectedSize);
-                    System.out.println("[SERVER] Start file transfer: transferId=" + transferId +
-                            ", filename=" + filename + ", expectedSize=" + expectedSize);
+
+                    System.out.println("[TRANSFER] Start file transfer: transferId=" + transferId +
+                            ", filename=" + filename + ", expectedSize=" + expectedSize + ", sender=" + senderToken);
+
                     try {
                         File uploadsDir = new File(UPLOADS_DIR);
                         if (!uploadsDir.exists()) uploadsDir.mkdirs();
                         OutputStream fos = new FileOutputStream(new File(uploadsDir, filename));
                         activeFileStreams.put(transferId, fos);
                         activeFileNames.put(transferId, filename);
-                        System.out.println("[SERVER] File stream opened for: " + filename);
+
+                        System.out.println("[TRANSFER] File stream opened for: " + filename);
+
                     } catch (Exception e) {
-                        System.err.println("Failed to open file stream: " + e.getMessage());
+
+                        System.err.println("[TRANSFER] Failed to open file stream: " + e.getMessage());
+
                     }
 
                     String targetToken = tokenPairs.get(senderToken);
@@ -234,18 +273,19 @@ public class UnifiedServer {
                     }
                     Channel target = clients.get(targetToken);
                     if (target == null || !target.isActive()) {
-                        System.err.println("[SERVER] Target channel not active for token: " + targetToken);
+
+                        System.err.println("[TRANSFER] Target channel not active for token: " + targetToken);
+
                         ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target client not connected"));
                         return;
                     }
-                    if (target != null && target.isActive()) {
-                        target.writeAndFlush(new TextWebSocketFrame(message));
-                    } else {
-                        ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target not connected"));
-                    }
+
+                    target.writeAndFlush(new TextWebSocketFrame(message));
                     ctx.channel().writeAndFlush(new TextWebSocketFrame("OK:READY:" + transferId));
                 } else {
-                    System.err.println("[SERVER] Invalid FILE_INFO format: " + message);
+
+                    System.err.println("[TRANSFER] Invalid FILE_INFO format: " + message);
+
                     ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Invalid FILE_INFO format"));
                 }
 
@@ -257,6 +297,9 @@ public class UnifiedServer {
                     String androidUserId = getUserIdFromToken(androidToken);
                     String pcUserId = getUserIdFromToken(pcToken);
                     if (androidUserId == null || pcUserId == null) {
+
+                        System.err.println("[PAIR] Invalid JWT in REGISTER_PAIR. androidToken=" + androidToken + ", pcToken=" + pcToken);
+
                         ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Invalid JWT token in REGISTER_PAIR"));
                         return;
                     }
@@ -269,6 +312,9 @@ public class UnifiedServer {
                     if (androidCh != null) androidCh.writeAndFlush(new TextWebSocketFrame("PAIR_REGISTERED:" + pcUserId));
                     if (pcCh != null) pcCh.writeAndFlush(new TextWebSocketFrame("PAIR_REGISTERED:" + androidUserId));
                 } else {
+
+                    System.err.println("[PAIR] Invalid REGISTER_PAIR format: " + message);
+
                     ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Invalid REGISTER_PAIR format"));
                 }
             } else if (message.startsWith("FILE_END:")) {
@@ -280,9 +326,13 @@ public class UnifiedServer {
                 if (fos != null) {
                     try {
                         fos.close();
-                        System.out.println("File saved: " + fileName);
+
+                        System.out.println("[TRANSFER] File saved: " + fileName + " (transferId=" + transferId + ")");
+
                     } catch (Exception e) {
-                        System.err.println("Error closing file: " + e.getMessage());
+
+                        System.err.println("[TRANSFER] Error closing file: " + e.getMessage());
+
                     }
                 }
                 fileTransferSize.remove(transferId);
@@ -295,15 +345,18 @@ public class UnifiedServer {
                 }
                 Channel target = clients.get(targetToken);
                 if (target == null || !target.isActive()) {
+
+                    System.err.println("[TRANSFER] Target client not connected for FILE_END. targetToken=" + targetToken);
+
                     ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target client not connected"));
                     return;
                 }
-                if (target != null && target.isActive()) {
-                    target.writeAndFlush(new TextWebSocketFrame("FILE_END:" + transferId));
-                }
 
+                target.writeAndFlush(new TextWebSocketFrame("FILE_END:" + transferId));
                 ctx.channel().writeAndFlush(new TextWebSocketFrame("FILE_RECEIVED:" + transferId));
-                System.out.println("[SERVER] SLOT_FREE: " + transferId);
+
+                System.out.println("[TRANSFER] SLOT_FREE: " + transferId);
+
                 ctx.channel().writeAndFlush(new TextWebSocketFrame("SLOT_FREE"));
             } else if (message.equals("DELETE_PAIRING")) {
                 String pairToken = tokenPairs.remove(senderToken);
@@ -315,7 +368,13 @@ public class UnifiedServer {
                         pairCh.writeAndFlush(new TextWebSocketFrame("PAIR_STATUS:NO"));
                     }
                     ctx.channel().writeAndFlush(new TextWebSocketFrame("PAIR_DELETED:SUCCESS"));
+
+                    System.out.println("[PAIR] Pairing deleted for sender: " + senderToken + " and pair: " + pairToken);
+
                 } else {
+
+                    System.err.println("[PAIR] No pairing found for sender: " + senderToken);
+
                     ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:No pairing found"));
                 }
             } else if (message.startsWith("FILE_RECEIVED:")) {
@@ -323,76 +382,173 @@ public class UnifiedServer {
                 String transferId = parts[1];
                 String targetToken = tokenPairs.get(senderToken);
                 if (targetToken == null) {
+
+                    System.err.println("[TRANSFER] Target token not found for FILE_RECEIVED. senderToken=" + senderToken);
+
                     ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target not connected"));
                     return;
                 }
                 Channel target = clients.get(targetToken);
                 if (target == null || !target.isActive()) {
+
+                    System.err.println("[TRANSFER] Target client not connected for FILE_RECEIVED. targetToken=" + targetToken);
+
                     ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target client not connected"));
                     return;
                 }
-                if (target != null && target.isActive()) {
-                    target.writeAndFlush(new TextWebSocketFrame("FILE_RECEIVED:" + transferId));
-                }
+                target.writeAndFlush(new TextWebSocketFrame("FILE_RECEIVED:" + transferId));
+
+                System.out.println("[TRANSFER] FILE_RECEIVED relayed to target: " + targetToken + " transferId=" + transferId);
+
             } else if (message.startsWith("FILE_LIST:")) {
                 String fileListJson = message.substring("FILE_LIST:".length());
                 String targetToken = tokenPairs.get(senderToken);
                 if (targetToken == null) {
+
+                    System.err.println("[FILE_LIST] Target token not found for senderToken: " + senderToken);
+
                     ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target not connected"));
                     return;
                 }
                 Channel target = clients.get(targetToken);
                 if (target == null || !target.isActive()) {
+
+                    System.err.println("[FILE_LIST] Target client not connected for FILE_LIST. targetToken=" + targetToken);
+
                     ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target client not connected"));
                     return;
                 }
-                if (target != null && target.isActive()) {
-                    target.writeAndFlush(new TextWebSocketFrame("FILE_LIST:" + fileListJson));
-                } else {
-                    ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target client not connected"));
-                }
+                target.writeAndFlush(new TextWebSocketFrame("FILE_LIST:" + fileListJson));
+
+                System.out.println("[FILE_LIST] Relayed file list to target: " + targetToken);
+
             } else if (message.startsWith("DELETE_FILE:")) {
                 String fileId = message.substring("DELETE_FILE:".length());
                 String targetToken = tokenPairs.get(senderToken);
                 if (targetToken == null) {
+
+                    System.err.println("[DELETE_FILE] Target token not found for senderToken: " + senderToken);
+
                     ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target not connected"));
                     return;
                 }
                 Channel target = clients.get(targetToken);
                 if (target == null || !target.isActive()) {
+
+                    System.err.println("[DELETE_FILE] Target client not connected for DELETE_FILE. targetToken=" + targetToken);
+
                     ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target client not connected"));
                     return;
                 }
-                if (target != null && target.isActive()) {
-                    target.writeAndFlush(new TextWebSocketFrame("DELETE_FILE:" + fileId));
-                } else {
-                    ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target client not connected"));
-                }
+
+                target.writeAndFlush(new TextWebSocketFrame("DELETE_FILE:" + fileId));
+
+                System.out.println("[DELETE_FILE] DELETE_FILE relayed to target: " + targetToken + " fileId=" + fileId);
+
             } else if (message.equals("GET_FILES")) {
                 String targetToken = tokenPairs.get(senderToken);
                 if (targetToken == null) {
+
+                    System.err.println("[GET_FILES] Target token not found for senderToken: " + senderToken);
+
                     ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target not connected"));
                     return;
                 }
                 Channel target = clients.get(targetToken);
                 if (target == null || !target.isActive()) {
+
+                    System.err.println("[GET_FILES] Target client not connected for GET_FILES. targetToken=" + targetToken);
+
                     ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target client not connected"));
                     return;
                 }
-                if (target != null && target.isActive()) {
-                    target.writeAndFlush(new TextWebSocketFrame("GET_FILES"));
-                } else {
-                    ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target client not connected"));
+                target.writeAndFlush(new TextWebSocketFrame("GET_FILES"));
+
+                System.out.println("[GET_FILES] Sent GET_FILES to target: " + targetToken);
+
+            } else if (message.startsWith("MISSING_FILES:")) {
+                String missingIdsJson = message.substring("MISSING_FILES:".length());
+                String targetToken = tokenPairs.get(senderToken);
+                if (targetToken == null) {
+
+                    System.err.println("[MISSING_FILES] Target token not found for senderToken: " + senderToken);
+
+                    ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target not connected"));
+                    return;
                 }
+                Channel target = clients.get(targetToken);
+                if (target == null || !target.isActive()) {
+
+                    System.err.println("[MISSING_FILES] Target client not connected for MISSING_FILES. targetToken=" + targetToken);
+
+                    ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target client not connected"));
+                    return;
+                }
+
+                System.out.println("[MISSING_FILES] Forwarding missing file ids from sender: " + senderToken + " to target: " + targetToken + " ids=" + missingIdsJson);
+
+                target.writeAndFlush(new TextWebSocketFrame("REQUEST_PREVIEW:" + missingIdsJson));
+            } else if (message.startsWith("PREVIEW_UPDATED:")) {
+                String previewsJson = message.substring("PREVIEW_UPDATED:".length());
+                String targetToken = tokenPairs.get(senderToken);
+                if (targetToken == null) {
+
+                    System.err.println("[PREVIEW_UPDATED] Target token not found for senderToken: " + senderToken);
+
+                    ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target not connected"));
+                    return;
+                }
+                Channel target = clients.get(targetToken);
+                if (target == null || !target.isActive()) {
+
+                    System.err.println("[PREVIEW_UPDATED] Target client not connected for PREVIEW_UPDATED. targetToken=" + targetToken);
+
+                    ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target client not connected"));
+                    return;
+                }
+
+                System.out.println("[PREVIEW_UPDATED] Forwarded previews to target: " + targetToken);
+
+                target.writeAndFlush(new TextWebSocketFrame("PREVIEW_UPDATED:" + previewsJson));
+            } else if (message.startsWith("REQUEST_FILE:")) {
+                String fileName = message.substring("REQUEST_FILE:".length()).trim();
+
+                String targetToken = tokenPairs.get(senderToken);
+                if (targetToken == null) {
+                    System.err.println("[REQUEST_FILE] Target token not found for senderToken: " + senderToken);
+                    ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target not connected"));
+                    return;
+                }
+
+                Channel target = clients.get(targetToken);
+                if (target == null || !target.isActive()) {
+                    System.err.println("[REQUEST_FILE] Target client not connected for REQUEST_FILE. targetToken=" + targetToken);
+                    ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target client not connected"));
+                    return;
+                }
+
+                System.out.println("[REQUEST_FILE] Forwarded REQUEST_FILE for file: " + fileName + " to target: " + targetToken);
+
+                target.writeAndFlush(new TextWebSocketFrame("REQUEST_FILE:" + fileName));
+
             } else if (message.startsWith("IS_PAIRED:")) {
                 String pcToken = message.substring("IS_PAIRED:".length()).trim();
                 String androidToken = tokenPairs.get(pcToken);
                 if (androidToken != null) {
+
+                    System.out.println("[PAIR] Pair exists for pcToken=" + pcToken);
+
                     ctx.channel().writeAndFlush(new TextWebSocketFrame("PAIR_STATUS:YES"));
                 } else {
+
+                    System.out.println("[PAIR] No pair for pcToken=" + pcToken);
+
                     ctx.channel().writeAndFlush(new TextWebSocketFrame("PAIR_STATUS:NO"));
                 }
             } else {
+
+                System.err.println("[SERVER] ERROR: Unknown command from userId=" + senderToken + " message=" + message);
+
                 ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Unknown command"));
             }
         }
@@ -418,24 +574,35 @@ public class UnifiedServer {
                     try {
                         fos.write(chunk);
                         long totalReceived = fileTransferSize.getOrDefault(transferId, 0L);
-                        System.out.println("[SERVER] FILE_DATA: transferId=" + transferId +
+
+                        System.out.println("[TRANSFER] FILE_DATA: transferId=" + transferId +
                                 ", chunkSize=" + chunk.length + ", totalReceived=" + totalReceived);
+
                     } catch (IOException e) {
-                        System.err.println("File write error: " + e.getMessage());
+
+                        System.err.println("[TRANSFER] File write error: " + e.getMessage());
+
                     }
                 } else {
-                    System.err.println("[SERVER] No file stream for transferId " + transferId);
+
+                    System.err.println("[TRANSFER] No file stream for transferId " + transferId);
+
                 }
 
                 String senderToken = userId;
                 String targetToken = tokenPairs.get(senderToken);
                 if (targetToken == null) {
-                    System.err.println("[SERVER] Target token not found for senderToken: " + senderToken);
+
+                    System.err.println("[TRANSFER] Target token not found for FILE_DATA. senderToken=" + senderToken);
+
                     ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target not connected"));
                     return;
                 }
                 Channel target = clients.get(targetToken);
                 if (target == null || !target.isActive()) {
+
+                    System.err.println("[TRANSFER] Target client not connected for FILE_DATA. targetToken=" + targetToken);
+
                     ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target client not connected"));
                     return;
                 }
@@ -444,11 +611,15 @@ public class UnifiedServer {
                     toSend.writeBytes(prefixBytes);
                     toSend.writeBytes(chunk);
                     target.writeAndFlush(new BinaryWebSocketFrame(toSend));
-                    System.out.println("[SERVER] Forwarded FILE_DATA chunk to target client: " + targetToken +
-                            ", transferId=" + transferId + ", size=" + chunk.length);
+
+                    System.out.println("[TRANSFER] Forwarded FILE_DATA chunk to target: " + targetToken +
+                            ", transferId=" + transferId + ", chunkSize=" + chunk.length);
+
                 }
             } else {
-                System.err.println("Unknown binary prefix received on server: " + prefix);
+
+                System.err.println("[SERVER] Unknown binary prefix received: " + prefix);
+
             }
             buffer.release();
         }
@@ -458,6 +629,9 @@ public class UnifiedServer {
                 Algorithm algorithm = Algorithm.HMAC256(SECRET);
                 return JWT.require(algorithm).acceptLeeway(60).build().verify(jwtToken).getSubject();
             } catch (Exception e) {
+
+                System.err.println("[JWT] Error decoding token: " + e.getMessage());
+
                 return null;
             }
         }
@@ -480,14 +654,21 @@ public class UnifiedServer {
             }
             if (toRemove != null) {
                 clients.remove(toRemove);
-                System.out.println("[SERVER] Removed client: " + toRemove);
+
+                System.out.println("[SERVER] Client disconnected: userId=" + toRemove);
+
             }else {
+
                 System.out.println("[SERVER] handlerRemoved: couldn't find channel " + ctx.channel().id());
+
             }
         }
 
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+
+            System.err.println("[EXCEPTION] " + cause.getMessage());
+
             cause.printStackTrace();
             ctx.close();
         }
