@@ -233,14 +233,15 @@ public class UnifiedServer {
                     ctx.channel().writeAndFlush(new TextWebSocketFrame("BUSY:MAX_TRANSFERS"));
                     return;
                 }
-                String[] parts = message.split(":", 5);
+                String[] parts = message.split(":", 6);
                 System.out.println("[FILE_INFO] parts: " + parts);
                 System.out.println("[FILE_INFO] parts.length: " + parts.length);
-                if (parts.length >= 4) {
+                if (parts.length >= 5) {
                     String transferId = parts[1];
                     fileTransferSize.put(transferId, 0L);
                     String filename = parts[2];
                     String size = parts[3];
+                    String previewUri = parts.length > 5 ? parts[5] : null;
 
                     long expectedSize = Long.parseLong(size);
 
@@ -248,7 +249,8 @@ public class UnifiedServer {
                     fileExpectedSize.put(transferId, expectedSize);
 
                     System.out.println("[TRANSFER] Start file transfer: transferId=" + transferId +
-                            ", filename=" + filename + ", expectedSize=" + expectedSize + ", sender=" + senderToken);
+                            ", filename=" + filename + ", expectedSize=" + expectedSize + ", sender=" + senderToken +
+                            ", previewUri=" + previewUri);
 
                     try {
                         File uploadsDir = new File(UPLOADS_DIR);
