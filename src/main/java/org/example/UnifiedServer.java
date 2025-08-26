@@ -35,7 +35,7 @@ public class UnifiedServer {
     private static final Map<String, OutputStream> activeFileStreams = new ConcurrentHashMap<>();
     private static final Map<String, String> activeFileNames = new ConcurrentHashMap<>();
     private final Map<String, ByteArrayOutputStream> fileBuffers = new ConcurrentHashMap<>();
-    private static final int MAX_ACTIVE_TRANSFERS = 8;
+    private static final int MAX_ACTIVE_TRANSFERS = 20;
 
     public static void main(String[] args) throws Exception {
         int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "8080"));
@@ -99,10 +99,9 @@ public class UnifiedServer {
 
                             userId = getUserIdFromToken(jwt);
                             if (userId == null) {
-                                clients.put(userId, ctx.channel());
-                                ctx.channel().writeAndFlush(new TextWebSocketFrame("REGISTERED:" + userId));
-                                System.out.println("[SERVER] Client connected: userId=" + userId +
-                                        ", remote=" + ctx.channel().remoteAddress());
+                                System.err.println("[AUTH] Invalid JWT, userId=null");
+                                ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Invalid JWT"));
+                                ctx.close();
                                 return;
                             }
                             clients.put(userId, ctx.channel());
@@ -238,7 +237,6 @@ public class UnifiedServer {
                 System.out.println("[FILE_INFO] parts.length: " + parts.length);
                 if (parts.length >= 5) {
                     String transferId = parts[1];
-                    fileTransferSize.put(transferId, 0L);
                     String filename = parts[2];
                     String size = parts[3];
                     String previewUri = parts.length > 5 ? parts[5] : null;
@@ -575,7 +573,8 @@ public class UnifiedServer {
                 if (fos != null) {
                     try {
                         fos.write(chunk);
-                        long totalReceived = fileTransferSize.getOrDefault(transferId, 0L);
+                        long totalReceived = fileTransferSize.getOrDefault(transferId, 0L) + chunk.length;
+                        fileTransferSize.put(transferId, totalReceived);
 
                         System.out.println("[TRANSFER] FILE_DATA: transferId=" + transferId +
                                 ", chunkSize=" + chunk.length + ", totalReceived=" + totalReceived);
