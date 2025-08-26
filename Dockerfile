@@ -4,29 +4,25 @@ FROM openjdk:17-jdk-slim
 # Устанавливаем рабочую директорию
 WORKDIR /app
 
-# Устанавливаем Maven
-RUN apt-get update && apt-get install -y maven curl
+# Устанавливаем Maven и curl
+RUN apt-get update && apt-get install -y maven curl && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
 # Копируем pom.xml сначала для лучшего кэширования
 COPY pom.xml ./
 
-# Скачиваем зависимости
-RUN mvn dependency:go-offline
+# Скачиваем зависимости (это создаст слой кэша)
+RUN mvn dependency:go-offline -B
 
 # Копируем исходный код
 COPY src ./src
 
 # Собираем проект
-RUN mvn clean package -DskipTests
+RUN mvn clean package -DskipTests -B
 
-# Копируем собранный JAR файл
-RUN cp target/*.jar app.jar
-
-# Создаем директорию для логов
-RUN mkdir -p /app/logs
-
-# Создаем директорию для загрузок
-RUN mkdir -p /app/uploads
+# Создаем директории
+RUN mkdir -p /app/logs /app/uploads
 
 # Устанавливаем переменные окружения для Render.com
 ENV BIND_ADDRESS=0.0.0.0
@@ -39,8 +35,8 @@ ENV JWT_SECRET=your-secret-key-here
 EXPOSE 8080 8081
 
 # Создаем пользователя для безопасности
-RUN useradd -r -s /bin/false appuser
-RUN chown -R appuser:appuser /app
+RUN useradd -r -s /bin/false appuser && \
+    chown -R appuser:appuser /app
 USER appuser
 
 # Health check
@@ -48,4 +44,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD curl -f http://localhost:8081/health || exit 1
 
 # Запускаем приложение
-CMD ["java", "-jar", "app.jar"]
+CMD ["java", "-jar", "target/*.jar"]

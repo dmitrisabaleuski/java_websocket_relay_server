@@ -40,3 +40,14 @@ docker-compose.yml
 .env
 .env.local
 .env.production
+
+# Maven wrapper (not needed in container)
+.mvn/wrapper/
+
+# Test files
+src/test/
+
+# IDE specific
+*.ipr
+*.iws
+*.iml
