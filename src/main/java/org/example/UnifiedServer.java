@@ -23,25 +23,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import static io.netty.handler.codec.http.HttpHeaderNames.*;
 
-import org.java_websocket.WebSocket;
-import org.java_websocket.handshake.ClientHandshake;
-import org.java_websocket.server.WebSocketServer;
-import org.java_websocket.framing.TextWebSocketFrame;
-import org.java_websocket.framing.BinaryWebSocketFrame;
-import org.java_websocket.framing.CloseFrame;
-
-import java.net.InetSocketAddress;
-import java.nio.ByteBuffer;
-import java.util.*;
-import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.logging.Logger;
-import java.util.logging.Level;
-import java.util.logging.FileHandler;
-import java.util.logging.SimpleFormatter;
-
-public class UnifiedServer extends WebSocketServer {
+public class UnifiedServer {
 
     private static final String SECRET = System.getenv().getOrDefault("JWT_SECRET", "eY9xh9F!j$3Kz0@VqLu7pT1cG2mNwqAr");
     private static final String UPLOADS_DIR = System.getenv().getOrDefault("UPLOADS_DIR", "uploads");
@@ -59,664 +41,99 @@ public class UnifiedServer extends WebSocketServer {
     private static final java.util.Timer heartbeatTimer = new java.util.Timer(true);
     private static final long HEARTBEAT_INTERVAL = 30000; // 30 seconds
 
-    private static final Logger LOGGER = Logger.getLogger(UnifiedServer.class.getName());
-    private static final int MAX_CLIENTS = 100;
-    private static final int RATE_LIMIT_PER_MINUTE = 1000;
-    private static final int HEARTBEAT_INTERVAL_WS = 30000; // 30 seconds
-    
-    // Client management
-    private final Map<String, ClientInfo> clientsWS = new ConcurrentHashMap<>();
-    private final Map<String, String> clientTokens = new ConcurrentHashMap<>();
-    private final Map<String, String> pcClients = new ConcurrentHashMap<>();
-    private final Map<String, String> androidClients = new ConcurrentHashMap<>();
-    
-    // Rate limiting
-    private final Map<String, RateLimitInfo> rateLimits = new ConcurrentHashMap<>();
-    private final Map<String, AtomicInteger> requestCounts = new ConcurrentHashMap<>();
-    
-    // Caching
-    private final Map<String, CacheEntry> cache = new ConcurrentHashMap<>();
-    private final int MAX_CACHE_SIZE = 1000;
-    private final long CACHE_TTL = 300000; // 5 minutes
-    
-    // Performance monitoring
-    private final AtomicLong totalRequests = new AtomicLong(0);
-    private final AtomicLong totalBytesTransferred = new AtomicLong(0);
-    private final AtomicInteger activeConnections = new AtomicInteger(0);
-    private final long startTime = System.currentTimeMillis();
-    
-    // Heartbeat
-    private final ScheduledExecutorService heartbeatExecutor = Executors.newScheduledThreadPool(1);
-    private final Timer heartbeatTimerWS = new Timer();
-    
-    // Load balancing
-    private final LoadBalancer loadBalancer = new LoadBalancer();
-    
-    // Admin HTTP server
-    private AdminHttpServer adminServer;
-    
-    public UnifiedServer(int port) {
-        super(new InetSocketAddress(port));
-        setupLogging();
-        startHeartbeatTimer();
-        startPerformanceMonitoring();
-        startAdminServer(port + 1); // HTTP сервер на следующем порту
-        LOGGER.info("HomeCloud Unified Server started on port " + port);
-    }
-    
-    private void startAdminServer(int httpPort) {
+    public static void main(String[] args) throws Exception {
+        int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "8080"));
+        File uploads = new File(UPLOADS_DIR);
+        if (!uploads.exists()) uploads.mkdirs();
+
+        EventLoopGroup bossGroup = new NioEventLoopGroup(1);
+        EventLoopGroup workerGroup = new NioEventLoopGroup();
         try {
-            adminServer = new AdminHttpServer(httpPort);
-            adminServer.start();
-            LOGGER.info("Admin HTTP server started on port " + httpPort);
-            LOGGER.info("Admin panel available at: http://localhost:" + httpPort + "/admin");
-        } catch (Exception e) {
-            LOGGER.log(Level.SEVERE, "Failed to start admin HTTP server", e);
-        }
-    }
-    
-    private void setupLogging() {
-        try {
-            FileHandler fileHandler = new FileHandler("homecloud_server.log", true);
-            fileHandler.setFormatter(new SimpleFormatter());
-            LOGGER.addHandler(fileHandler);
-            LOGGER.setLevel(Level.ALL);
-        } catch (Exception e) {
-            LOGGER.log(Level.SEVERE, "Failed to setup file logging", e);
-        }
-    }
-    
-    @Override
-    public void onOpen(WebSocket conn, ClientHandshake handshake) {
-        String clientId = generateClientId();
-        String clientAddress = conn.getRemoteSocketAddress().getAddress().getHostAddress();
-        
-        ClientInfo clientInfo = new ClientInfo(clientId, conn, clientAddress);
-        clientsWS.put(clientId, clientInfo);
-        activeConnections.incrementAndGet();
-        
-        // Rate limiting setup
-        rateLimits.put(clientId, new RateLimitInfo());
-        requestCounts.put(clientId, new AtomicInteger(0));
-        
-        LOGGER.info("Client connected: " + clientId + " from " + clientAddress);
-        LOGGER.info("Active connections: " + activeConnections.get() + "/" + MAX_CLIENTS);
-        
-        // Send welcome message
-        conn.send("WELCOME:" + clientId);
-        
-        // Check if we're at capacity
-        if (activeConnections.get() >= MAX_CLIENTS) {
-            LOGGER.warning("Server at maximum capacity, rejecting new connections");
-            conn.close(CloseFrame.TRY_AGAIN_LATER, "Server at maximum capacity");
-        }
-    }
-    
-    @Override
-    public void onClose(WebSocket conn, int code, String reason, boolean remote) {
-        String clientId = findClientId(conn);
-        if (clientId != null) {
-            clientsWS.remove(clientId);
-            clientTokens.remove(clientId);
-            pcClients.remove(clientId);
-            androidClients.remove(clientId);
-            rateLimits.remove(clientId);
-            requestCounts.remove(clientId);
-            activeConnections.decrementAndGet();
+            ServerBootstrap b = new ServerBootstrap();
+            b.group(bossGroup, workerGroup)
+                    .channel(NioServerSocketChannel.class)
+                    .childHandler(new ChannelInitializer<SocketChannel>() {
+                        @Override
+                        protected void initChannel(SocketChannel ch) {
+                            ChannelPipeline pipeline = ch.pipeline();
+                            pipeline.addLast(new HttpServerCodec());
+                            pipeline.addLast(new HttpObjectAggregator(64 * 1024 * 1024));
+                            pipeline.addLast(new WebSocketServerProtocolHandler("/", null, true, 64 * 1024 * 1024));
+                            pipeline.addLast(new WebSocketFrameAggregator(64 * 1024 * 1024));
+                            pipeline.addLast(new ChunkedWriteHandler());
+                            pipeline.addLast(new UnifiedServerHandler());
+                        }
+                    });
+
+            System.out.println("[SERVER] Netty server started on port " + port);
             
-            LOGGER.info("Client disconnected: " + clientId + " (Code: " + code + ", Reason: " + reason + ")");
-            LOGGER.info("Active connections: " + activeConnections.get());
+            // Start heartbeat timer
+            startHeartbeatTimer();
+            System.out.println("[SERVER] Heartbeat timer started with interval: " + HEARTBEAT_INTERVAL + "ms");
+
+            b.bind(port).sync().channel().closeFuture().sync();
+        } finally {
+            stopHeartbeatTimer();
+            bossGroup.shutdownGracefully();
+            workerGroup.shutdownGracefully();
         }
     }
     
-    @Override
-    public void onMessage(WebSocket conn, String message) {
-        String clientId = findClientId(conn);
-        if (clientId == null) {
-            LOGGER.warning("Message from unknown client: " + message);
-            return;
-        }
-        
-        // Rate limiting check
-        if (!checkRateLimit(clientId)) {
-            LOGGER.warning("Rate limit exceeded for client: " + clientId);
-            conn.send("ERROR:RATE_LIMIT_EXCEEDED");
-            return;
-        }
-        
-        // Update request count
-        totalRequests.incrementAndGet();
-        requestCounts.get(clientId).incrementAndGet();
-        
-        // Process message
-        try {
-            processMessage(clientId, conn, message);
-        } catch (Exception e) {
-            LOGGER.log(Level.SEVERE, "Error processing message from " + clientId + ": " + message, e);
-            conn.send("ERROR:INTERNAL_ERROR");
-        }
-    }
-    
-    @Override
-    public void onMessage(WebSocket conn, ByteBuffer message) {
-        String clientId = findClientId(conn);
-        if (clientId == null) return;
-        
-        // Update bytes transferred
-        totalBytesTransferred.addAndGet(message.remaining());
-        
-        // Process binary message
-        try {
-            processBinaryMessage(clientId, conn, message);
-        } catch (Exception e) {
-            LOGGER.log(Level.SEVERE, "Error processing binary message from " + clientId, e);
-        }
-    }
-    
-    @Override
-    public void onError(WebSocket conn, Exception ex) {
-        String clientId = findClientId(conn);
-        LOGGER.log(Level.SEVERE, "Error on connection " + clientId, ex);
-    }
-    
-    @Override
-    public void onStart() {
-        LOGGER.info("HomeCloud Server started successfully");
-        LOGGER.info("Maximum clients: " + MAX_CLIENTS);
-        LOGGER.info("Rate limit: " + RATE_LIMIT_PER_MINUTE + " requests per minute");
-        LOGGER.info("Admin panel available at: http://localhost:" + (getPort() + 1) + "/admin");
-    }
-    
-    @Override
-    public void onStop() {
-        if (adminServer != null) {
-            adminServer.stop();
-        }
-        LOGGER.info("HomeCloud Server stopped");
-    }
-    
-    private void processMessage(String clientId, WebSocket conn, String message) {
-        String[] parts = message.split(":", 2);
-        String command = parts[0];
-        String data = parts.length > 1 ? parts[1] : "";
-        
-        // Check cache first
-        String cacheKey = clientId + ":" + message;
-        CacheEntry cached = cache.get(cacheKey);
-        if (cached != null && !cached.isExpired()) {
-            conn.send(cached.getResponse());
-            return;
-        }
-        
-        switch (command) {
-            case "REGISTER_PAIR":
-                handleRegisterPair(clientId, conn, data);
-                break;
-            case "PAIR_STATUS":
-                handlePairStatus(clientId, conn, data);
-                break;
-            case "GET_FILES":
-                handleGetFiles(clientId, conn);
-                break;
-            case "FILE_INFO":
-                handleFileInfo(clientId, conn, data);
-                break;
-            case "FILE_DATA":
-                handleFileData(clientId, conn, data);
-                break;
-            case "FILE_END":
-                handleFileEnd(clientId, conn, data);
-                break;
-            case "FILE_RECEIVED":
-                handleFileReceived(clientId, conn, data);
-                break;
-            case "DELETE_FILE":
-                handleDeleteFile(clientId, conn, data);
-                break;
-            case "MISSING_FILES":
-                handleMissingFiles(clientId, conn, data);
-                break;
-            case "PING":
-                handlePing(clientId, conn);
-                break;
-            case "PONG":
-                handlePong(clientId, conn);
-                break;
-            default:
-                LOGGER.warning("Unknown command from " + clientId + ": " + command);
-                conn.send("ERROR:UNKNOWN_COMMAND");
-        }
-        
-        // Cache response if appropriate
-        cacheResponse(cacheKey, "OK");
-    }
-    
-    private void processBinaryMessage(String clientId, WebSocket conn, ByteBuffer message) {
-        // Handle file data transfer
-        LOGGER.info("Binary message received from " + clientId + ", size: " + message.remaining() + " bytes");
-        
-        // Forward to paired client if exists
-        String pairedClientId = findPairedClient(clientId);
-        if (pairedClientId != null) {
-            WebSocket pairedConn = clientsWS.get(pairedClientId).getConnection();
-            if (pairedConn != null && pairedConn.isOpen()) {
-                pairedConn.send(message);
-            }
-        }
-    }
-    
-    private boolean checkRateLimit(String clientId) {
-        RateLimitInfo rateInfo = rateLimits.get(clientId);
-        AtomicInteger count = requestCounts.get(clientId);
-        
-        long currentTime = System.currentTimeMillis();
-        if (currentTime - rateInfo.getLastReset() > 60000) { // 1 minute
-            rateInfo.setLastReset(currentTime);
-            count.set(0);
-        }
-        
-        return count.get() < RATE_LIMIT_PER_MINUTE;
-    }
-    
-    private void cacheResponse(String key, String response) {
-        if (cache.size() >= MAX_CACHE_SIZE) {
-            // Remove oldest entries
-            cache.entrySet().removeIf(entry -> entry.getValue().isExpired());
-        }
-        
-        cache.put(key, new CacheEntry(response, System.currentTimeMillis() + CACHE_TTL));
-    }
-    
-    private void startHeartbeatTimer() {
-        heartbeatTimer.scheduleAtFixedRate(new TimerTask() {
+    /**
+     * Start heartbeat timer to send PING to all connected clients
+     */
+    private static void startHeartbeatTimer() {
+        heartbeatTimer.scheduleAtFixedRate(new java.util.TimerTask() {
             @Override
             public void run() {
-                sendHeartbeatToAllClients();
+                try {
+                    sendHeartbeatToAllClients();
+                } catch (Exception e) {
+                    System.err.println("[HEARTBEAT] Error sending heartbeat: " + e.getMessage());
+                }
             }
         }, HEARTBEAT_INTERVAL, HEARTBEAT_INTERVAL);
     }
     
-    private void startPerformanceMonitoring() {
-        ScheduledExecutorService monitorExecutor = Executors.newScheduledThreadPool(1);
-        monitorExecutor.scheduleAtFixedRate(() -> {
-            logPerformanceMetrics();
-        }, 60, 60, TimeUnit.SECONDS);
-    }
-    
-    private void logPerformanceMetrics() {
-        long uptime = System.currentTimeMillis() - startTime;
-        LOGGER.info("=== Performance Metrics ===");
-        LOGGER.info("Active connections: " + activeConnections.get());
-        LOGGER.info("Total requests: " + totalRequests.get());
-        LOGGER.info("Total bytes transferred: " + totalBytesTransferred.get());
-        LOGGER.info("Cache size: " + cache.size());
-        LOGGER.info("Uptime: " + (uptime / 1000 / 60) + " minutes");
-        LOGGER.info("Memory usage: " + (Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()) / 1024 / 1024 + " MB");
-    }
-    
-    // Getters for admin panel
-    public long getActiveConnections() { return activeConnections.get(); }
-    public long getTotalRequests() { return totalRequests.get(); }
-    public long getTotalBytesTransferred() { return totalBytesTransferred.get(); }
-    public long getUptime() { return System.currentTimeMillis() - startTime; }
-    public Map<String, ClientInfo> getClients() { return new HashMap<>(clientsWS); }
-    
-    // Existing methods...
-    private void handleRegisterPair(String clientId, WebSocket conn, String data) {
-        String[] parts = data.split(":", 3);
-        if (parts.length == 3) {
-            String androidToken = parts[1];
-            String pcToken = parts[2];
-            String androidUserId = getUserIdFromToken(androidToken);
-            String pcUserId = getUserIdFromToken(pcToken);
-            if (androidUserId == null || pcUserId == null) {
-                LOGGER.warning("Invalid JWT in REGISTER_PAIR. androidToken=" + androidToken + ", pcToken=" + pcToken);
-                conn.send("ERROR:Invalid JWT token in REGISTER_PAIR");
-                return;
-            }
-            tokenPairs.put(pcUserId, androidUserId);
-            tokenPairs.put(androidUserId, pcUserId);
-
-            Channel androidCh = clients.get(androidUserId);
-            Channel pcCh = clients.get(pcUserId);
-            LOGGER.info("IS TOKENS EXIST: ANDROID" + androidToken + " PC: " + pcToken + " PART: " + Arrays.toString(parts));
-            if (androidCh != null) androidCh.writeAndFlush(new TextWebSocketFrame("PAIR_REGISTERED:" + pcUserId));
-            if (pcCh != null) pcCh.writeAndFlush(new TextWebSocketFrame("PAIR_REGISTERED:" + androidUserId));
-        } else {
-            LOGGER.warning("Invalid REGISTER_PAIR format: " + data);
-            conn.send("ERROR:Invalid REGISTER_PAIR format");
+    /**
+     * Stop heartbeat timer
+     */
+    private static void stopHeartbeatTimer() {
+        if (heartbeatTimer != null) {
+            heartbeatTimer.cancel();
+            System.out.println("[HEARTBEAT] Heartbeat timer stopped");
         }
     }
     
-    private void handlePairStatus(String clientId, WebSocket conn, String data) {
-        String pcToken = data.trim();
-        String androidToken = tokenPairs.get(pcToken);
-        if (androidToken != null) {
-            LOGGER.info("Pair exists for pcToken=" + pcToken);
-            conn.send("PAIR_STATUS:YES");
-        } else {
-            LOGGER.info("No pair for pcToken=" + pcToken);
-            conn.send("PAIR_STATUS:NO");
-        }
-    }
-    
-    private void handleGetFiles(String clientId, WebSocket conn) {
-        String targetToken = tokenPairs.get(clientId);
-        if (targetToken == null) {
-            LOGGER.warning("Target token not found for GET_FILES. clientId=" + clientId);
-            conn.send("ERROR:Target not connected");
+    /**
+     * Send PING to all connected clients
+     */
+    private static void sendHeartbeatToAllClients() {
+        if (clients.isEmpty()) {
             return;
-        }
-        Channel target = clients.get(targetToken);
-        if (target == null || !target.isActive()) {
-            LOGGER.warning("Target client not connected for GET_FILES. targetToken=" + targetToken);
-            conn.send("ERROR:Target client not connected");
-            return;
-        }
-        target.writeAndFlush(new TextWebSocketFrame("GET_FILES"));
-        LOGGER.info("Sent GET_FILES to target: " + targetToken);
-    }
-    
-    private void handleFileInfo(String clientId, WebSocket conn, String data) {
-        if (activeFileStreams.size() >= MAX_ACTIVE_TRANSFERS) {
-            LOGGER.warning("BUSY:MAX_TRANSFERS for sender=" + clientId);
-            conn.send("BUSY:MAX_TRANSFERS");
-            return;
-        }
-        String[] parts = data.split(":", 6);
-        LOGGER.info("FILE_INFO] parts: " + Arrays.toString(parts));
-        LOGGER.info("FILE_INFO] parts.length: " + parts.length);
-        if (parts.length >= 5) {
-            String transferId = parts[1];
-            String filename = parts[2];
-            String size = parts[3];
-            String previewUri = parts.length > 5 ? parts[5] : null;
-
-            long expectedSize = Long.parseLong(size);
-
-            fileTransferSize.put(transferId, 0L);
-            fileExpectedSize.put(transferId, expectedSize);
-
-            LOGGER.info("Start file transfer: transferId=" + transferId +
-                    ", filename=" + filename + ", expectedSize=" + expectedSize + ", sender=" + clientId +
-                    ", previewUri=" + previewUri);
-
-            try {
-                File uploadsDir = new File(UPLOADS_DIR);
-                if (!uploadsDir.exists()) uploadsDir.mkdirs();
-                OutputStream fos = new FileOutputStream(new File(uploadsDir, filename));
-                activeFileStreams.put(transferId, fos);
-                activeFileNames.put(transferId, filename);
-
-                LOGGER.info("File stream opened for: " + filename);
-
-            } catch (Exception e) {
-                LOGGER.warning("Failed to open file stream: " + e.getMessage());
-            }
-
-            String targetToken = tokenPairs.get(clientId);
-            if (targetToken == null) {
-                LOGGER.warning("Target token not found for senderToken: " + clientId);
-                conn.send("ERROR:Target not connected");
-                return;
-            }
-            Channel target = clients.get(targetToken);
-            if (target == null || !target.isActive()) {
-                LOGGER.warning("Target channel not active for token: " + targetToken);
-                conn.send("ERROR:Target client not connected");
-                return;
-            }
-
-            target.writeAndFlush(new TextWebSocketFrame(data));
-            conn.send("OK:READY:" + transferId);
-        } else {
-            LOGGER.warning("Invalid FILE_INFO format: " + data);
-            conn.send("ERROR:Invalid FILE_INFO format");
-        }
-    }
-    
-    private void handleFileData(String clientId, WebSocket conn, String data) {
-        String[] parts = data.split(":", 2);
-        String transferId = parts[1];
-        int dataLen = parts[0].length() - "FILE_DATA:".length(); // Calculate data length from prefix
-        byte[] chunk = new byte[dataLen];
-        System.arraycopy(data.getBytes(StandardCharsets.UTF_8), "FILE_DATA:".length(), chunk, 0, dataLen);
-
-        OutputStream fos = activeFileStreams.get(transferId);
-        LOGGER.info("FILE_DATA]: fos= " + fos);
-        if (fos != null) {
-            try {
-                fos.write(chunk);
-                long totalReceived = fileTransferSize.getOrDefault(transferId, 0L) + chunk.length;
-                fileTransferSize.put(transferId, totalReceived);
-
-                LOGGER.info("FILE_DATA: transferId=" + transferId +
-                        ", chunkSize=" + chunk.length + ", totalReceived=" + totalReceived);
-
-            } catch (IOException e) {
-                LOGGER.warning("File write error: " + e.getMessage());
-            }
-        } else {
-            LOGGER.warning("No file stream for transferId " + transferId);
-        }
-
-        String senderToken = clientId;
-        String targetToken = tokenPairs.get(senderToken);
-        if (targetToken == null) {
-            LOGGER.warning("Target token not found for FILE_DATA. senderToken=" + senderToken);
-            conn.send("ERROR:Target not connected");
-            return;
-        }
-        Channel target = clients.get(targetToken);
-        if (target == null || !target.isActive()) {
-            LOGGER.warning("Target client not connected for FILE_DATA. targetToken=" + targetToken);
-            conn.send("ERROR:Target client not connected");
-            return;
-        }
-        if (target != null && target.isActive()) {
-            ByteBuf toSend = Unpooled.buffer(data.length()); // Use original data length
-            toSend.writeBytes(data.getBytes(StandardCharsets.UTF_8));
-            target.writeAndFlush(new BinaryWebSocketFrame(toSend));
-
-            LOGGER.info("Forwarded FILE_DATA chunk to target: " + targetToken +
-                    ", transferId=" + transferId + ", chunkSize=" + chunk.length);
-
-        }
-    }
-    
-    private void handleFileEnd(String clientId, WebSocket conn, String data) {
-        String[] parts = data.split(":", 2);
-        String transferId = parts[1];
-
-        OutputStream fos = activeFileStreams.remove(transferId);
-        String fileName = activeFileNames.remove(transferId);
-        if (fos != null) {
-            try {
-                fos.close();
-                LOGGER.info("File saved: " + fileName + " (transferId=" + transferId + ")");
-            } catch (Exception e) {
-                LOGGER.warning("Error closing file: " + e.getMessage());
-            }
-        }
-        fileTransferSize.remove(transferId);
-        fileExpectedSize.remove(transferId);
-
-        String targetToken = tokenPairs.get(clientId);
-        if (targetToken == null) {
-            conn.send("ERROR:Target not connected");
-            return;
-        }
-        Channel target = clients.get(targetToken);
-        if (target == null || !target.isActive()) {
-            LOGGER.warning("Target client not connected for FILE_END. targetToken=" + targetToken);
-            conn.send("ERROR:Target client not connected");
-            return;
-        }
-
-        target.writeAndFlush(new TextWebSocketFrame("FILE_END:" + transferId));
-        conn.send("FILE_RECEIVED:" + transferId);
-
-        LOGGER.info("SLOT_FREE: " + transferId);
-
-        conn.send("SLOT_FREE");
-    }
-    
-    private void handleFileReceived(String clientId, WebSocket conn, String data) {
-        String[] parts = data.split(":", 2);
-        String transferId = parts[1];
-        String targetToken = tokenPairs.get(clientId);
-        if (targetToken == null) {
-            LOGGER.warning("Target token not found for FILE_RECEIVED. senderToken=" + clientId);
-            conn.send("ERROR:Target not connected");
-            return;
-        }
-        Channel target = clients.get(targetToken);
-        if (target == null || !target.isActive()) {
-            LOGGER.warning("Target client not connected for FILE_RECEIVED. targetToken=" + targetToken);
-            conn.send("ERROR:Target client not connected");
-            return;
-        }
-        target.writeAndFlush(new TextWebSocketFrame("FILE_RECEIVED:" + transferId));
-        LOGGER.info("FILE_RECEIVED relayed to target: " + targetToken + " transferId=" + transferId);
-    }
-    
-    private void handleDeleteFile(String clientId, WebSocket conn, String data) {
-        String fileId = data;
-        String targetToken = tokenPairs.get(clientId);
-        if (targetToken == null) {
-            LOGGER.warning("Target token not found for DELETE_FILE. senderToken=" + clientId);
-            conn.send("ERROR:Target not connected");
-            return;
-        }
-        Channel target = clients.get(targetToken);
-        if (target == null || !target.isActive()) {
-            LOGGER.warning("Target client not connected for DELETE_FILE. targetToken=" + targetToken);
-            conn.send("ERROR:Target client not connected");
-            return;
-        }
-
-        target.writeAndFlush(new TextWebSocketFrame("DELETE_FILE:" + fileId));
-        LOGGER.info("DELETE_FILE relayed to target: " + targetToken + " fileId=" + fileId);
-    }
-    
-    private void handleMissingFiles(String clientId, WebSocket conn, String data) {
-        String missingIdsJson = data;
-        String targetToken = tokenPairs.get(clientId);
-        if (targetToken == null) {
-            LOGGER.warning("Target token not found for MISSING_FILES. senderToken=" + clientId);
-            conn.send("ERROR:Target not connected");
-            return;
-        }
-        Channel target = clients.get(targetToken);
-        if (target == null || !target.isActive()) {
-            LOGGER.warning("Target client not connected for MISSING_FILES. targetToken=" + targetToken);
-            conn.send("ERROR:Target client not connected");
-            return;
-        }
-
-        LOGGER.info("Forwarding missing file ids from sender: " + clientId + " to target: " + targetToken + " ids=" + missingIdsJson);
-
-        target.writeAndFlush(new TextWebSocketFrame("REQUEST_PREVIEW:" + missingIdsJson));
-    }
-    
-    private void handlePing(String clientId, WebSocket conn) {
-        LOGGER.info("Received PING from userId=" + clientId);
-        conn.send("PONG");
-    }
-    
-    private void handlePong(String clientId, WebSocket conn) {
-        // Update last heartbeat time
-        ClientInfo clientInfo = clientsWS.get(clientId);
-        if (clientInfo != null) {
-            clientInfo.setLastHeartbeat(System.currentTimeMillis());
-        }
-    }
-    
-    private void sendHeartbeatToAllClients() {
-        clientsWS.values().forEach(clientInfo -> {
-            WebSocket conn = clientInfo.getConnection();
-            if (conn != null && conn.isOpen()) {
-                conn.send("PING");
-            }
-        });
-    }
-    
-    private String generateClientId() {
-        return UUID.randomUUID().toString().substring(0, 8);
-    }
-    
-    private String findClientId(WebSocket conn) {
-        return clientsWS.entrySet().stream()
-                .filter(entry -> entry.getValue().getConnection() == conn)
-                .map(Map.Entry::getKey)
-                .findFirst()
-                .orElse(null);
-    }
-    
-    private String findPairedClient(String clientId) {
-        // Implementation for finding paired client
-        return null;
-    }
-    
-    // Inner classes for data structures
-    public static class ClientInfo {
-        private final String id;
-        private final WebSocket connection;
-        private final String address;
-        private long lastHeartbeat;
-        private int requestCount;
-        
-        public ClientInfo(String id, WebSocket connection, String address) {
-            this.id = id;
-            this.connection = connection;
-            this.address = address;
-            this.lastHeartbeat = System.currentTimeMillis();
-            this.requestCount = 0;
         }
         
-        // Getters and setters
-        public String getId() { return id; }
-        public WebSocket getConnection() { return connection; }
-        public String getAddress() { return address; }
-        public long getLastHeartbeat() { return lastHeartbeat; }
-        public void setLastHeartbeat(long lastHeartbeat) { this.lastHeartbeat = lastHeartbeat; }
-        public int getRequestCount() { return requestCount; }
-        public void incrementRequestCount() { this.requestCount++; }
-        public boolean isConnected() { return connection != null && connection.isOpen(); }
-    }
-    
-    private static class RateLimitInfo {
-        private long lastReset;
+        System.out.println("[HEARTBEAT] Sending PING to " + clients.size() + " connected clients");
         
-        public RateLimitInfo() {
-            this.lastReset = System.currentTimeMillis();
-        }
-        
-        public long getLastReset() { return lastReset; }
-        public void setLastReset(long lastReset) { this.lastReset = lastReset; }
-    }
-    
-    private static class CacheEntry {
-        private final String response;
-        private final long expirationTime;
-        
-        public CacheEntry(String response, long expirationTime) {
-            this.response = response;
-            this.expirationTime = expirationTime;
-        }
-        
-        public String getResponse() { return response; }
-        public boolean isExpired() { return System.currentTimeMillis() > expirationTime; }
-    }
-    
-    private static class LoadBalancer {
-        // Simple round-robin load balancing
-        private final AtomicInteger counter = new AtomicInteger(0);
-        
-        public String getNextClient(Collection<String> clientIds) {
-            if (clientIds.isEmpty()) return null;
-            int index = counter.getAndIncrement() % clientIds.size();
-            return clientIds.toArray(new String[0])[index];
+        for (Map.Entry<String, Channel> entry : clients.entrySet()) {
+            Channel channel = entry.getValue();
+            String userId = entry.getKey();
+            
+            if (channel != null && channel.isActive()) {
+                try {
+                    channel.writeAndFlush(new TextWebSocketFrame("PING"));
+                    System.out.println("[HEARTBEAT] Sent PING to userId: " + userId);
+                } catch (Exception e) {
+                    System.err.println("[HEARTBEAT] Failed to send PING to userId " + userId + ": " + e.getMessage());
+                    // Remove inactive channel
+                    clients.remove(userId);
+                    System.out.println("[HEARTBEAT] Removed inactive channel for userId: " + userId);
+                }
+            } else {
+                // Remove inactive channel
+                clients.remove(userId);
+                System.out.println("[HEARTBEAT] Removed inactive channel for userId: " + userId);
+            }
         }
     }
 

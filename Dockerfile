@@ -1,47 +1,18 @@
-# Используем официальный образ Java 17
-FROM openjdk:17-jdk-slim
+# Build stage
+FROM gradle:8.5.0-jdk21 AS build
 
-# Устанавливаем рабочую директорию
 WORKDIR /app
-
-# Устанавливаем Maven и curl
-RUN apt-get update && apt-get install -y maven curl && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
-
-# Копируем pom.xml сначала для лучшего кэширования
-COPY pom.xml ./
-
-# Скачиваем зависимости (это создаст слой кэша)
-RUN mvn dependency:go-offline -B
-
-# Копируем исходный код
+COPY build.gradle.kts settings.gradle.kts ./
+COPY gradle ./gradle
+COPY gradlew ./
+RUN chmod +x ./gradlew
 COPY src ./src
+RUN ./gradlew shadowJar --no-daemon
 
-# Собираем проект
-RUN mvn clean package -DskipTests -B
+# Runtime stage
+FROM eclipse-temurin:21-jre
+WORKDIR /app
+COPY --from=build /app/build/libs/*-all.jar app.jar
 
-# Создаем директории
-RUN mkdir -p /app/logs /app/uploads
-
-# Устанавливаем переменные окружения для Render.com
-ENV BIND_ADDRESS=0.0.0.0
-ENV HTTP_THREAD_POOL_SIZE=20
-ENV RENDER_ENVIRONMENT=production
-ENV UPLOADS_DIR=/app/uploads
-ENV JWT_SECRET=your-secret-key-here
-
-# Открываем порты
-EXPOSE 8080 8081
-
-# Создаем пользователя для безопасности
-RUN useradd -r -s /bin/false appuser && \
-    chown -R appuser:appuser /app
-USER appuser
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD curl -f http://localhost:8081/health || exit 1
-
-# Запускаем приложение
-CMD ["java", "-jar", "target/*.jar"]
+EXPOSE 8080
+CMD ["java", "-jar", "app.jar"]
