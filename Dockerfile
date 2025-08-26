@@ -4,19 +4,23 @@ FROM openjdk:17-jdk-slim
 # Устанавливаем рабочую директорию
 WORKDIR /app
 
-# Копируем исходный код
-COPY src ./src
+# Устанавливаем Maven
+RUN apt-get update && apt-get install -y maven curl
+
+# Копируем pom.xml сначала для лучшего кэширования
 COPY pom.xml ./
 
-# Устанавливаем Maven и собираем проект
-RUN apt-get update && apt-get install -y maven
+# Скачиваем зависимости
+RUN mvn dependency:go-offline
+
+# Копируем исходный код
+COPY src ./src
+
+# Собираем проект
 RUN mvn clean package -DskipTests
 
 # Копируем собранный JAR файл
 RUN cp target/*.jar app.jar
-
-# Копируем ресурсы
-COPY src/main/resources/ ./resources/
 
 # Создаем директорию для логов
 RUN mkdir -p /app/logs
