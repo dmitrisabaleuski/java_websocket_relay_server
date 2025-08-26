@@ -4,8 +4,16 @@ FROM openjdk:17-jdk-slim
 # Устанавливаем рабочую директорию
 WORKDIR /app
 
-# Копируем JAR файл
-COPY target/*.jar app.jar
+# Копируем исходный код
+COPY src ./src
+COPY pom.xml ./
+
+# Устанавливаем Maven и собираем проект
+RUN apt-get update && apt-get install -y maven
+RUN mvn clean package -DskipTests
+
+# Копируем собранный JAR файл
+RUN cp target/*.jar app.jar
 
 # Копируем ресурсы
 COPY src/main/resources/ ./resources/
