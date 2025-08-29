@@ -17,7 +17,7 @@ tasks {
     shadowJar {
         manifest {
             attributes(
-                "Main-Class" to "org.example.UnifiedServer"
+                "Main-Class" to "org.example.UnifiedServerRefactored"
             )
         }
     }
