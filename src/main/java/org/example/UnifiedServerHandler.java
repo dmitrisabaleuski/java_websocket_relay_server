@@ -15,6 +15,8 @@ import org.json.JSONArray;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import io.netty.channel.Channel;
+import java.io.File;
+import java.io.FileOutputStream;
 
 /**
  * Simplified UnifiedServerHandler using new modules
@@ -169,6 +171,8 @@ public class UnifiedServerHandler extends SimpleChannelInboundHandler<Object> {
         if (frame instanceof TextWebSocketFrame) {
             String message = ((TextWebSocketFrame) frame).text();
             handleTextMessage(ctx, message);
+        } else if (frame instanceof BinaryWebSocketFrame) {
+            handleBinaryMessage(ctx, (BinaryWebSocketFrame) frame);
         } else if (frame instanceof CloseWebSocketFrame) {
             ctx.channel().close();
         }
@@ -188,6 +192,40 @@ public class UnifiedServerHandler extends SimpleChannelInboundHandler<Object> {
                 ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Invalid JWT"));
                 ctx.close();
             }
+        }
+    }
+    
+    private void handleBinaryMessage(ChannelHandlerContext ctx, BinaryWebSocketFrame frame) {
+        try {
+            // Получаем данные файла
+            ByteBuf content = frame.content();
+            byte[] fileData = new byte[content.readableBytes()];
+            content.readBytes(fileData);
+            
+            // Создаем файл в папке uploads
+            String fileName = "file_" + System.currentTimeMillis() + ".bin";
+            File uploadsDir = new File(ServerConfig.getUploadsDir());
+            if (!uploadsDir.exists()) {
+                uploadsDir.mkdirs();
+            }
+            
+            File file = new File(uploadsDir, fileName);
+            try (FileOutputStream fos = new FileOutputStream(file)) {
+                fos.write(fileData);
+            }
+            
+            // Отправляем подтверждение
+            ctx.channel().writeAndFlush(new TextWebSocketFrame("FILE_RECEIVED:" + fileName));
+            
+            // Обновляем статистику
+            ServerStatistics.incrementFileTransfers();
+            ServerStatistics.addBytesTransferred(fileData.length);
+            
+            AdminLogger.log("INFO", "FILE", "File received: " + fileName + " (" + fileData.length + " bytes)");
+            
+        } catch (Exception e) {
+            AdminLogger.log("ERROR", "FILE", "Error processing file: " + e.getMessage());
+            ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:File processing failed"));
         }
     }
     
