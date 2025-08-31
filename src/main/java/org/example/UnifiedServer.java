@@ -8,55 +8,55 @@ import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.codec.http.HttpObjectAggregator;
 import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.codec.http.websocketx.WebSocketServerProtocolHandler;
+import io.netty.handler.codec.http.websocketx.WebSocketFrameAggregator;
 import io.netty.handler.stream.ChunkedWriteHandler;
-import org.example.utils.AdminLogger;
+import org.example.handlers.UnifiedServerHandler;
 import org.example.utils.ServerConfig;
-import org.example.UnifiedServerHandler;
 
 import java.io.File;
 
 /**
- * Refactored UnifiedServer - main server class
- * Handles HTTP and WebSocket connections with proper protocol support
+ * Main HomeCloud Server class
+ * Handles server bootstrap and initialization
  */
-public class UnifiedServerRefactored {
-    
+public class UnifiedServer {
+
     public static void main(String[] args) throws Exception {
-        int port = ServerConfig.getPort();
-        File uploads = new File(ServerConfig.getUploadsDir());
+        int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "8080"));
+        File uploads = new File(ServerConfig.UPLOADS_DIR);
         if (!uploads.exists()) uploads.mkdirs();
         
-        // Initialize admin logging
-        AdminLogger.log("INFO", "SYSTEM", "Server starting on port " + port);
-        
+        System.out.println("[SERVER] Starting HomeCloud Server on port " + port);
+
         EventLoopGroup bossGroup = new NioEventLoopGroup(1);
         EventLoopGroup workerGroup = new NioEventLoopGroup();
         
         try {
-            ServerBootstrap bootstrap = new ServerBootstrap();
-            bootstrap.group(bossGroup, workerGroup)
+            ServerBootstrap b = new ServerBootstrap();
+            b.group(bossGroup, workerGroup)
                     .channel(NioServerSocketChannel.class)
                     .childHandler(new ChannelInitializer<SocketChannel>() {
                         @Override
                         protected void initChannel(SocketChannel ch) {
                             ChannelPipeline pipeline = ch.pipeline();
-                            
-                            // HTTP codec
                             pipeline.addLast(new HttpServerCodec());
+                            pipeline.addLast(new HttpObjectAggregator(64 * 1024 * 1024));
+                            pipeline.addLast(new WebSocketServerProtocolHandler("/", null, true, 64 * 1024 * 1024));
+                            pipeline.addLast(new WebSocketFrameAggregator(64 * 1024 * 1024));
                             pipeline.addLast(new ChunkedWriteHandler());
-                            pipeline.addLast(new HttpObjectAggregator(ServerConfig.MAX_MESSAGE_SIZE));
-                            
-                            // Custom handler for business logic
                             pipeline.addLast(new UnifiedServerHandler());
                         }
                     });
+
+            System.out.println("[SERVER] Netty server started on port " + port);
             
-            ChannelFuture future = bootstrap.bind(port).sync();
-            AdminLogger.log("INFO", "SYSTEM", "Server started successfully on port " + port);
-            System.out.println("Server started on port " + port);
-            
-            future.channel().closeFuture().sync();
+            // Start heartbeat timer
+            org.example.utils.HeartbeatManager.startHeartbeatTimer();
+            System.out.println("[SERVER] Heartbeat timer started");
+
+            b.bind(port).sync().channel().closeFuture().sync();
         } finally {
+            org.example.utils.HeartbeatManager.stopHeartbeatTimer();
             bossGroup.shutdownGracefully();
             workerGroup.shutdownGracefully();
         }

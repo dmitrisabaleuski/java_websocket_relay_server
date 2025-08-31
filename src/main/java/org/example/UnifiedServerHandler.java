@@ -62,18 +62,28 @@ public class UnifiedServerHandler extends SimpleChannelInboundHandler<Object> {
     }
     
     private void handleTokenRequest(ChannelHandlerContext ctx, FullHttpRequest req) {
+        System.out.println("[UnifiedServerHandler] HTTP Token request received: " + req.uri());
+        System.out.println("[UnifiedServerHandler] HTTP method: " + req.method());
+        System.out.println("[UnifiedServerHandler] HTTP headers: " + req.headers());
+        
         try {
             String body = req.content().toString(CharsetUtil.UTF_8);
+            System.out.println("[UnifiedServerHandler] HTTP body: " + body);
+            
             JSONObject json = new JSONObject(body);
             String userId = json.optString("userId");
+            System.out.println("[UnifiedServerHandler] Extracted userId: " + userId);
             
             if (userId == null || userId.isEmpty()) {
+                System.err.println("[UnifiedServerHandler] Empty userId, sending UNAUTHORIZED");
                 sendHttpResponse(ctx, req, new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.UNAUTHORIZED));
                 return;
             }
             
             // Create JWT token (simplified)
             String token = "JWT_" + userId + "_" + System.currentTimeMillis();
+            System.out.println("[UnifiedServerHandler] Generated token: " + token);
+            
             ByteBuf content = Unpooled.copiedBuffer(token, CharsetUtil.UTF_8);
             FullHttpResponse resp = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK, content);
             resp.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/plain");
@@ -81,7 +91,10 @@ public class UnifiedServerHandler extends SimpleChannelInboundHandler<Object> {
             
             sendHttpResponse(ctx, req, resp);
             AdminLogger.log("INFO", "TOKEN", "Token issued for userId=" + userId);
+            System.out.println("[UnifiedServerHandler] Token response sent successfully");
         } catch (Exception e) {
+            System.err.println("[UnifiedServerHandler] Error in handleTokenRequest: " + e.getMessage());
+            e.printStackTrace();
             sendHttpResponse(ctx, req, new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.INTERNAL_SERVER_ERROR));
         }
     }
@@ -284,10 +297,18 @@ public class UnifiedServerHandler extends SimpleChannelInboundHandler<Object> {
     }
     
     private void sendHttpResponse(ChannelHandlerContext ctx, FullHttpRequest req, FullHttpResponse res) {
+        System.out.println("[UnifiedServerHandler] Sending HTTP response: " + res.status());
+        System.out.println("[UnifiedServerHandler] Response headers: " + res.headers());
+        
+        // Add CORS headers for browser compatibility
+        res.headers().set(HttpHeaderNames.ACCESS_CONTROL_ALLOW_ORIGIN, "*");
+        res.headers().set(HttpHeaderNames.ACCESS_CONTROL_ALLOW_METHODS, "GET, POST, OPTIONS");
+        res.headers().set(HttpHeaderNames.ACCESS_CONTROL_ALLOW_HEADERS, "Content-Type");
+        
         ctx.channel().writeAndFlush(res);
-        if (!HttpUtil.isKeepAlive(req) || res.status().code() != 200) {
-            ctx.channel().close();
-        }
+        
+        // Close connection after sending response
+        ctx.channel().close();
     }
     
     @Override
