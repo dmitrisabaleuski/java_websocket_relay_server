@@ -155,6 +155,9 @@ public class UnifiedServerHandler extends SimpleChannelInboundHandler<Object> {
     }
     
     private void handleWebSocketHandshake(ChannelHandlerContext ctx, FullHttpRequest req) {
+        System.out.println("[UnifiedServerHandler] WebSocket handshake request: " + req.uri());
+        System.out.println("[UnifiedServerHandler] Headers: " + req.headers());
+        
         String wsUrl = "ws://" + req.headers().get(HttpHeaderNames.HOST) + req.uri();
         WebSocketServerHandshakerFactory wsFactory = new WebSocketServerHandshakerFactory(wsUrl, null, true);
         handshaker = wsFactory.newHandshaker(req);
@@ -162,8 +165,10 @@ public class UnifiedServerHandler extends SimpleChannelInboundHandler<Object> {
         if (handshaker != null) {
             handshaker.handshake(ctx.channel(), req);
             AdminLogger.log("INFO", "WS", "WebSocket handshake completed");
+            System.out.println("[UnifiedServerHandler] WebSocket handshake completed successfully");
         } else {
             WebSocketServerHandshakerFactory.sendUnsupportedVersionResponse(ctx.channel());
+            System.err.println("[UnifiedServerHandler] WebSocket handshake failed - unsupported version");
         }
     }
     
@@ -179,30 +184,60 @@ public class UnifiedServerHandler extends SimpleChannelInboundHandler<Object> {
     }
     
     private void handleTextMessage(ChannelHandlerContext ctx, String message) {
+        System.out.println("[UnifiedServerHandler] Received message: " + message);
+        
         if (message.startsWith("AUTH:")) {
             String jwt = message.substring("AUTH:".length());
+            System.out.println("[UnifiedServerHandler] Processing AUTH with token: " + jwt);
+            
             userId = extractUserIdFromToken(jwt);
+            System.out.println("[UnifiedServerHandler] Extracted userId: " + userId);
             
             if (userId != null) {
                 clients.put(userId, ctx.channel());
                 ctx.channel().writeAndFlush(new TextWebSocketFrame("REGISTERED:" + userId));
                 ServerStatistics.setActiveConnections(clients.size());
                 AdminLogger.log("INFO", "AUTH", "Client registered: userId=" + userId);
+                System.out.println("[UnifiedServerHandler] Client successfully registered: " + userId);
             } else {
+                System.err.println("[UnifiedServerHandler] Invalid JWT token: " + jwt);
                 ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Invalid JWT"));
                 ctx.close();
             }
+        } else if (message.startsWith("REGISTER_PAIR:")) {
+            // Handle pair registration
+            System.out.println("[UnifiedServerHandler] Processing REGISTER_PAIR: " + message);
+            String[] parts = message.split(":");
+            if (parts.length >= 3) {
+                String androidToken = parts[1];
+                String pcToken = parts[2];
+                System.out.println("[UnifiedServerHandler] Pair registered: Android=" + androidToken + ", PC=" + pcToken);
+                // Send confirmation
+                ctx.channel().writeAndFlush(new TextWebSocketFrame("PAIR_REGISTERED:OK"));
+            }
+        } else if (message.startsWith("GET_FILES")) {
+            // Handle file list request
+            System.out.println("[UnifiedServerHandler] Processing GET_FILES request");
+            String fileList = "[]"; // Empty file list for now
+            ctx.channel().writeAndFlush(new TextWebSocketFrame("FILE_LIST:" + fileList));
+        } else if (message.startsWith("FILE_END:")) {
+            // Handle file transfer completion
+            System.out.println("[UnifiedServerHandler] Processing FILE_END: " + message);
+            String transferId = message.split(":")[1];
+            ctx.channel().writeAndFlush(new TextWebSocketFrame("FILE_RECEIVED:" + transferId));
+        } else {
+            System.out.println("[UnifiedServerHandler] Unknown message type: " + message);
         }
     }
     
     private void handleBinaryMessage(ChannelHandlerContext ctx, BinaryWebSocketFrame frame) {
         try {
-            // Получаем данные файла
+            // Get file data
             ByteBuf content = frame.content();
             byte[] fileData = new byte[content.readableBytes()];
             content.readBytes(fileData);
             
-            // Создаем файл в папке uploads
+            // Create file in uploads directory
             String fileName = "file_" + System.currentTimeMillis() + ".bin";
             File uploadsDir = new File(ServerConfig.getUploadsDir());
             if (!uploadsDir.exists()) {
@@ -214,10 +249,10 @@ public class UnifiedServerHandler extends SimpleChannelInboundHandler<Object> {
                 fos.write(fileData);
             }
             
-            // Отправляем подтверждение
+            // Send confirmation
             ctx.channel().writeAndFlush(new TextWebSocketFrame("FILE_RECEIVED:" + fileName));
             
-            // Обновляем статистику
+            // Update statistics
             ServerStatistics.incrementFileTransfers();
             ServerStatistics.addBytesTransferred(fileData.length);
             
@@ -230,13 +265,21 @@ public class UnifiedServerHandler extends SimpleChannelInboundHandler<Object> {
     }
     
     private String extractUserIdFromToken(String token) {
+        System.out.println("[UnifiedServerHandler] Extracting userId from token: " + token);
+        
         // Simplified token validation
         if (token.startsWith("JWT_")) {
             String[] parts = token.split("_");
+            System.out.println("[UnifiedServerHandler] Token parts: " + java.util.Arrays.toString(parts));
+            
             if (parts.length >= 2) {
-                return parts[1];
+                String userId = parts[1];
+                System.out.println("[UnifiedServerHandler] Extracted userId: " + userId);
+                return userId;
             }
         }
+        
+        System.err.println("[UnifiedServerHandler] Invalid token format: " + token);
         return null;
     }
     

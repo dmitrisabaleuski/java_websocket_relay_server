@@ -17,6 +17,7 @@ import java.io.File;
 
 /**
  * Refactored UnifiedServer - main server class
+ * Handles HTTP and WebSocket connections with proper protocol support
  */
 public class UnifiedServerRefactored {
     
@@ -45,13 +46,17 @@ public class UnifiedServerRefactored {
                             pipeline.addLast(new ChunkedWriteHandler());
                             pipeline.addLast(new HttpObjectAggregator(ServerConfig.MAX_MESSAGE_SIZE));
                             
-                            // Custom handler
+                            // WebSocket protocol handler - handles upgrade and protocol
+                            pipeline.addLast(new WebSocketServerProtocolHandler("/", null, true));
+                            
+                            // Custom handler for business logic
                             pipeline.addLast(new UnifiedServerHandler());
                         }
                     });
             
             ChannelFuture future = bootstrap.bind(port).sync();
             AdminLogger.log("INFO", "SYSTEM", "Server started successfully on port " + port);
+            System.out.println("Server started on port " + port);
             
             future.channel().closeFuture().sync();
         } finally {
