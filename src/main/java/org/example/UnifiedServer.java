@@ -699,11 +699,11 @@ public class UnifiedServer {
 
         private String getUserIdFromToken(String jwtToken) {
             try {
-                // Сначала пробуем как стандартный JWT
+                // First try as standard JWT
                 Algorithm algorithm = Algorithm.HMAC256(SECRET);
                 return JWT.require(algorithm).acceptLeeway(60).build().verify(jwtToken).getSubject();
             } catch (Exception e) {
-                // Если не стандартный JWT, пробуем как упрощенный токен
+                // If not standard JWT, try as simplified token
                 if (jwtToken.startsWith("JWT_") && jwtToken.contains("_")) {
                     String[] parts = jwtToken.split("_", 3);
                     if (parts.length >= 2) {

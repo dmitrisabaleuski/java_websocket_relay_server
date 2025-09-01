@@ -1,101 +1,101 @@
 # HomeCloud Server - Refactored Version
 
-## 🚀 **Новая архитектура сервера**
+## 🚀 **New Server Architecture**
 
-### **📁 Структура файлов:**
+### **📁 File Structure:**
 ```
 src/main/java/org/example/
-├── UnifiedServerRefactored.java    # Главный класс сервера
-├── UnifiedServerHandler.java       # Обработчик HTTP/WebSocket
-├── AdminPanel.java                 # Админ-панель и веб-интерфейс
-├── ServerStatistics.java           # Статистика и метрики сервера
+├── UnifiedServerRefactored.java    # Main server class
+├── UnifiedServerHandler.java       # HTTP/WebSocket handler
+├── AdminPanel.java                 # Admin panel and web interface
+├── ServerStatistics.java           # Server statistics and metrics
 └── utils/
-    ├── AdminLogger.java            # Система логирования
-    └── ServerConfig.java           # Конфигурация сервера
+    ├── AdminLogger.java            # Logging system
+    └── ServerConfig.java           # Server configuration
 ```
 
-## 🎯 **Как запустить:**
+## 🎯 **How to Run:**
 
-### **1. Сборка:**
+### **1. Build:**
 ```bash
 cd relay_server/java_websocket_relay_server/java_websocket
 ./gradlew shadowJar
 ```
 
-### **2. Запуск:**
+### **2. Run:**
 ```bash
 java -jar build/libs/java_websocket_relay_server-all.jar
 ```
 
-### **3. Доступ к админ-панели:**
+### **3. Access Admin Panel:**
 - **URL:** `http://localhost:8080/admin`
-- **Логин:** `admin`
-- **Пароль:** `admin123`
+- **Login:** `admin`
+- **Password:** `admin123`
 
-## 🔧 **Конфигурация через переменные окружения:**
+## 🔧 **Configuration via Environment Variables:**
 
 ```bash
-# Порт сервера (по умолчанию: 8080)
+# Server port (default: 8080)
 export PORT=8080
 
-# Директория для загрузок (по умолчанию: uploads)
+# Upload directory (default: uploads)
 export UPLOADS_DIR=uploads
 
-# JWT секрет (по умолчанию: your-secret-key-change-this-in-production)
+# JWT secret (default: your-secret-key-change-this-in-production)
 export JWT_SECRET=your-secret-key
 
-# Логин админа (по умолчанию: admin)
+# Admin username (default: admin)
 export ADMIN_USERNAME=admin
 
-# Пароль админа (по умолчанию: admin123)
+# Admin password (default: admin123)
 export ADMIN_PASSWORD=admin123
 ```
 
-## 📊 **Доступные API endpoints:**
+## 📊 **Available API Endpoints:**
 
-### **Основные:**
-- `POST /api/token` - получение JWT токена
-- `GET /health` - проверка состояния сервера
+### **Main:**
+- `POST /api/token` - get JWT token
+- `GET /health` - server health check
 
-### **Админ-панель:**
-- `GET /admin` - страница входа
-- `POST /admin/login` - аутентификация
-- `GET /admin/dashboard` - дашборд
+### **Admin Panel:**
+- `GET /admin` - login page
+- `POST /admin/login` - authentication
+- `GET /admin/dashboard` - dashboard
 
-### **API для админа:**
-- `GET /api/stats` - статистика сервера
-- `GET /api/clients` - список клиентов
-- `GET /api/logs` - логи сервера
+### **Admin API:**
+- `GET /api/stats` - server statistics
+- `GET /api/clients` - client list
+- `GET /api/logs` - server logs
 
-## 🌟 **Преимущества новой архитектуры:**
+## 🌟 **New Architecture Benefits:**
 
-1. **Модульность** - код разделен на логические компоненты
-2. **Читаемость** - каждый файл отвечает за свою область
-3. **Поддержка** - легче вносить изменения и исправления
-4. **Расширяемость** - просто добавлять новые функции
-5. **Тестируемость** - каждый модуль можно тестировать отдельно
+1. **Modularity** - code is divided into logical components
+2. **Readability** - each file is responsible for its own area
+3. **Maintainability** - easier to make changes and fixes
+4. **Extensibility** - easy to add new features
+5. **Testability** - each module can be tested separately
 
-## 🔄 **Миграция со старой версии:**
+## 🔄 **Migration from Old Version:**
 
-1. **Остановите старый сервер**
-2. **Запустите новый:** `java -jar java_websocket_relay_server-all.jar`
-3. **Все функции работают так же!**
+1. **Stop old server**
+2. **Run new one:** `java -jar java_websocket_relay_server-all.jar`
+3. **All functions work the same!**
 
-## 🚨 **Важно:**
+## 🚨 **Important:**
 
-- **Старый файл** `UnifiedServer.java` остается для совместимости
-- **Новый файл** `UnifiedServerRefactored.java` - основная версия
-- **Все WebSocket соединения** работают без изменений
-- **Админ-панель** доступна сразу после запуска
+- **Old file** `UnifiedServer.java` remains for compatibility
+- **New file** `UnifiedServerRefactored.java` - main version
+- **All WebSocket connections** work without changes
+- **Admin panel** available immediately after startup
 
-## 📝 **Логирование:**
+## 📝 **Logging:**
 
-Все события логируются в консоль и доступны через админ-панель:
-- Системные события
-- Подключения клиентов
-- Админские действия
-- Ошибки и исключения
+All events are logged to console and available through admin panel:
+- System events
+- Client connections
+- Admin actions
+- Errors and exceptions
 
-## 🎉 **Готово к использованию!**
+## 🎉 **Ready to Use!**
 
-Новый сервер полностью функционален и готов к работе! 🚀✨
+New server is fully functional and ready to work! 🚀✨
