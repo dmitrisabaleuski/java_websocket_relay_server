@@ -321,9 +321,17 @@ public class UnifiedServer {
             }
 
             if (message.startsWith("FILE_INFO:")) {
+                // Detailed logging for transfer capacity
+                System.out.println("[CAPACITY] Current active streams: " + activeFileStreams.size() + "/" + MAX_ACTIVE_TRANSFERS + 
+                                   ", sender=" + senderToken);
+                
                 if (activeFileStreams.size() >= MAX_ACTIVE_TRANSFERS) {
-
-                    System.err.println("[TRANSFER] BUSY:MAX_TRANSFERS for sender=" + senderToken);
+                    System.err.println("[TRANSFER] ❌ BUSY:MAX_TRANSFERS for sender=" + senderToken);
+                    System.err.println("[TRANSFER] Active transfers list:");
+                    for (Map.Entry<String, String> entry : transferOwners.entrySet()) {
+                        System.err.println("  - transferId=" + entry.getKey() + ", owner=" + entry.getValue() + 
+                                         ", fileName=" + activeFileNames.get(entry.getKey()));
+                    }
 
                     ctx.channel().writeAndFlush(new TextWebSocketFrame("BUSY:MAX_TRANSFERS"));
                     return;
@@ -515,11 +523,12 @@ public class UnifiedServer {
                 }
                 target.writeAndFlush(new TextWebSocketFrame("FILE_RECEIVED:" + transferId));
 
-                System.out.println("[TRANSFER] FILE_RECEIVED relayed to target: " + targetToken + " transferId=" + transferId);
+                System.out.println("[TRANSFER] ✅ FILE_RECEIVED relayed to target: " + targetToken + " transferId=" + transferId);
 
                 // NOW send SLOT_FREE to the sender (Android) - PC has confirmed receipt!
                 target.writeAndFlush(new TextWebSocketFrame("SLOT_FREE"));
-                System.out.println("[TRANSFER] SLOT_FREE sent to " + targetToken + " after PC confirmation (active: " + activeFileStreams.size() + "/" + MAX_ACTIVE_TRANSFERS + ")");
+                System.out.println("[TRANSFER] ✅ SLOT_FREE sent to " + targetToken + " after PC confirmation");
+                System.out.println("[CAPACITY] After SLOT_FREE: active streams: " + activeFileStreams.size() + "/" + MAX_ACTIVE_TRANSFERS);
 
             } else if (message.startsWith("FILE_LIST:")) {
                 String fileListJson = message.substring("FILE_LIST:".length());
