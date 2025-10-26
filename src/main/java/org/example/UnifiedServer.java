@@ -471,9 +471,9 @@ public class UnifiedServer {
                 target.writeAndFlush(new TextWebSocketFrame("FILE_END:" + transferId));
                 ctx.channel().writeAndFlush(new TextWebSocketFrame("FILE_RECEIVED:" + transferId));
 
-                System.out.println("[TRANSFER] SLOT_FREE: " + transferId + " (active: " + activeFileStreams.size() + "/" + MAX_ACTIVE_TRANSFERS + ")");
-
-                ctx.channel().writeAndFlush(new TextWebSocketFrame("SLOT_FREE"));
+                // NOTE: SLOT_FREE is now sent when PC confirms FILE_RECEIVED, not here
+                // This prevents race condition where Android sends new file before PC confirms receipt
+                System.out.println("[TRANSFER] FILE_END processed, waiting for PC confirmation: " + transferId + " (active: " + activeFileStreams.size() + "/" + MAX_ACTIVE_TRANSFERS + ")");
             } else if (message.equals("DELETE_PAIRING")) {
                 String pairToken = tokenPairs.remove(senderToken);
                 if (pairToken != null) {
@@ -516,6 +516,10 @@ public class UnifiedServer {
                 target.writeAndFlush(new TextWebSocketFrame("FILE_RECEIVED:" + transferId));
 
                 System.out.println("[TRANSFER] FILE_RECEIVED relayed to target: " + targetToken + " transferId=" + transferId);
+
+                // NOW send SLOT_FREE to the sender (Android) - PC has confirmed receipt!
+                target.writeAndFlush(new TextWebSocketFrame("SLOT_FREE"));
+                System.out.println("[TRANSFER] SLOT_FREE sent to " + targetToken + " after PC confirmation (active: " + activeFileStreams.size() + "/" + MAX_ACTIVE_TRANSFERS + ")");
 
             } else if (message.startsWith("FILE_LIST:")) {
                 String fileListJson = message.substring("FILE_LIST:".length());
