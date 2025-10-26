@@ -811,6 +811,32 @@ public class UnifiedServer {
                 clients.remove(toRemove);
 
                 System.out.println("[SERVER] Client disconnected: userId=" + toRemove);
+                
+                // Clean up active file streams for this user
+                int cleanedStreams = 0;
+                java.util.Iterator<Map.Entry<String, OutputStream>> iterator = activeFileStreams.entrySet().iterator();
+                while (iterator.hasNext()) {
+                    Map.Entry<String, OutputStream> entry = iterator.next();
+                    String transferId = entry.getKey();
+                    
+                    // Close the stream and remove it
+                    try {
+                        entry.getValue().close();
+                        cleanedStreams++;
+                        System.out.println("[CLEANUP] Closed active stream for transferId: " + transferId);
+                    } catch (Exception e) {
+                        System.err.println("[CLEANUP] Error closing stream: " + e.getMessage());
+                    }
+                    
+                    iterator.remove();
+                    activeFileNames.remove(transferId);
+                    fileTransferSize.remove(transferId);
+                    fileExpectedSize.remove(transferId);
+                }
+                
+                if (cleanedStreams > 0) {
+                    System.out.println("[CLEANUP] Cleaned " + cleanedStreams + " active streams for disconnected user: " + toRemove);
+                }
 
             }else {
 
