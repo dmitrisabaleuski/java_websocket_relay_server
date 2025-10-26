@@ -181,8 +181,8 @@ public class UnifiedServer {
 
                             userId = getUserIdFromToken(jwt);
                             if (userId == null) {
-                                System.err.println("[AUTH] Invalid JWT, userId=null");
-                                ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Invalid JWT"));
+                                System.err.println("[AUTH] Invalid or expired JWT, userId=null");
+                                ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:TOKEN_EXPIRED"));
                                 ctx.close();
                                 return;
                             }
@@ -227,11 +227,18 @@ public class UnifiedServer {
                     sendHttpResponse(ctx, req, new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.UNAUTHORIZED));
                     return;
                 }
+                
+                // Get expiration hours from request (default: 7 days = 168 hours)
+                long expirationHours = json.optLong("expirationHours", 168L);
+                
+                // Validate expiration (minimum 1 hour, maximum 1 year)
+                if (expirationHours < 1) expirationHours = 1L;
+                if (expirationHours > 8760) expirationHours = 8760L; // Max 1 year
+                
                 Algorithm algorithm = Algorithm.HMAC256(SECRET);
                 
-                // Token expires in 7 days for security
                 java.util.Date now = new java.util.Date();
-                java.util.Date expiresAt = new java.util.Date(now.getTime() + (7L * 24 * 60 * 60 * 1000)); // 7 days
+                java.util.Date expiresAt = new java.util.Date(now.getTime() + (expirationHours * 60 * 60 * 1000));
                 
                 String token = JWT.create()
                         .withSubject(userId)
@@ -239,7 +246,7 @@ public class UnifiedServer {
                         .withExpiresAt(expiresAt)
                         .sign(algorithm);
                 
-                System.out.println("[TOKEN] Issued JWT for userId=" + userId + ", expires in 7 days");
+                System.out.println("[TOKEN] Issued JWT for userId=" + userId + ", expires in " + expirationHours + " hours (" + (expirationHours / 24) + " days)");
                 ByteBuf content = Unpooled.copiedBuffer(token, CharsetUtil.UTF_8);
                 FullHttpResponse resp = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK, content);
                 resp.headers().set(CONTENT_TYPE, "text/plain");
@@ -765,6 +772,9 @@ public class UnifiedServer {
                 // First try as standard JWT
                 Algorithm algorithm = Algorithm.HMAC256(SECRET);
                 return JWT.require(algorithm).acceptLeeway(60).build().verify(jwtToken).getSubject();
+            } catch (com.auth0.jwt.exceptions.TokenExpiredException e) {
+                System.err.println("[JWT] Token expired: " + jwtToken.substring(0, Math.min(20, jwtToken.length())) + "...");
+                return null; // Token expired - client needs to re-pair
             } catch (Exception e) {
                 // If not standard JWT, try as simplified token
                 if (jwtToken.startsWith("JWT_") && jwtToken.contains("_")) {
