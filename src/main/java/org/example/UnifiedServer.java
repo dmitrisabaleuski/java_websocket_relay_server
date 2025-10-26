@@ -345,6 +345,21 @@ public class UnifiedServer {
                             ", filename=" + filename + ", expectedSize=" + expectedSize + ", sender=" + senderToken +
                             ", previewUri=" + previewUri);
 
+                    // Check target BEFORE opening file stream to avoid leaks
+                    String targetToken = tokenPairs.get(senderToken);
+                    if (targetToken == null) {
+                        System.err.println("[SERVER] Target token not found for senderToken: " + senderToken);
+                        ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target not connected"));
+                        return;
+                    }
+                    
+                    Channel target = clients.get(targetToken);
+                    if (target == null || !target.isActive()) {
+                        System.err.println("[SERVER] Target client not connected. targetToken=" + targetToken);
+                        ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target client not connected"));
+                        return;
+                    }
+
                     try {
                         File uploadsDir = new File(UPLOADS_DIR);
                         if (!uploadsDir.exists()) uploadsDir.mkdirs();
@@ -352,27 +367,14 @@ public class UnifiedServer {
                         activeFileStreams.put(transferId, fos);
                         activeFileNames.put(transferId, filename);
 
-                        System.out.println("[TRANSFER] File stream opened for: " + filename);
+                        System.out.println("[TRANSFER] File stream opened for: " + filename + " (active: " + activeFileStreams.size() + "/" + MAX_ACTIVE_TRANSFERS + ")");
 
                     } catch (Exception e) {
 
                         System.err.println("[TRANSFER] Failed to open file stream: " + e.getMessage());
-
-                    }
-
-                    String targetToken = tokenPairs.get(senderToken);
-                    if (targetToken == null) {
-                        System.err.println("[SERVER] Target token not found for senderToken: " + senderToken);
-                        ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target not connected"));
+                        ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Failed to open file stream"));
                         return;
-                    }
-                    Channel target = clients.get(targetToken);
-                    if (target == null || !target.isActive()) {
 
-                        System.err.println("[TRANSFER] Target channel not active for token: " + targetToken);
-
-                        ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target client not connected"));
-                        return;
                     }
 
                     target.writeAndFlush(new TextWebSocketFrame(message));
@@ -435,19 +437,22 @@ public class UnifiedServer {
                     try {
                         fos.close();
 
-                        System.out.println("[TRANSFER] File saved: " + fileName + " (transferId=" + transferId + ")");
+                        System.out.println("[TRANSFER] File saved: " + fileName + " (transferId=" + transferId + ", active: " + activeFileStreams.size() + "/" + MAX_ACTIVE_TRANSFERS + ")");
 
                     } catch (Exception e) {
 
                         System.err.println("[TRANSFER] Error closing file: " + e.getMessage());
 
                     }
+                } else {
+                    System.err.println("[TRANSFER] FILE_END received but no active stream found for transferId: " + transferId);
                 }
                 fileTransferSize.remove(transferId);
                 fileExpectedSize.remove(transferId);
 
                 String targetToken = tokenPairs.get(senderToken);
                 if (targetToken == null) {
+                    System.err.println("[TRANSFER] Target token not found for FILE_END. senderToken=" + senderToken);
                     ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target not connected"));
                     return;
                 }
@@ -463,7 +468,7 @@ public class UnifiedServer {
                 target.writeAndFlush(new TextWebSocketFrame("FILE_END:" + transferId));
                 ctx.channel().writeAndFlush(new TextWebSocketFrame("FILE_RECEIVED:" + transferId));
 
-                System.out.println("[TRANSFER] SLOT_FREE: " + transferId);
+                System.out.println("[TRANSFER] SLOT_FREE: " + transferId + " (active: " + activeFileStreams.size() + "/" + MAX_ACTIVE_TRANSFERS + ")");
 
                 ctx.channel().writeAndFlush(new TextWebSocketFrame("SLOT_FREE"));
             } else if (message.equals("DELETE_PAIRING")) {
