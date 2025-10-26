@@ -37,7 +37,8 @@ public class UnifiedServer {
     private static final Map<String, String> activeFileNames = new ConcurrentHashMap<>();
     private static final Map<String, String> transferOwners = new ConcurrentHashMap<>(); // transferId -> userId (who initiated transfer)
     private final Map<String, ByteArrayOutputStream> fileBuffers = new ConcurrentHashMap<>();
-    private static final int MAX_ACTIVE_TRANSFERS = 20;
+    private static final int MAX_ACTIVE_TRANSFERS = 20; // Global limit - for scalability should be per-user
+    private static final int MAX_TRANSFERS_PER_USER = 5; // Per-user limit for better fairness
     
     // PING/PONG heartbeat system
     private static final java.util.Timer heartbeatTimer = new java.util.Timer(true);
@@ -321,12 +322,14 @@ public class UnifiedServer {
             }
 
             if (message.startsWith("FILE_INFO:")) {
-                // Detailed logging for transfer capacity
-                System.out.println("[CAPACITY] Current active streams: " + activeFileStreams.size() + "/" + MAX_ACTIVE_TRANSFERS + 
-                                   ", sender=" + senderToken);
+                // Count active transfers for this user
+                long userActiveTransfers = transferOwners.values().stream()
+                    .filter(owner -> owner.equals(senderToken))
+                    .count();
                 
+                // Check global limit
                 if (activeFileStreams.size() >= MAX_ACTIVE_TRANSFERS) {
-                    System.err.println("[TRANSFER] ❌ BUSY:MAX_TRANSFERS for sender=" + senderToken);
+                    System.err.println("[TRANSFER] ❌ BUSY:MAX_TRANSFERS (global limit) for sender=" + senderToken);
                     System.err.println("[TRANSFER] Active transfers list:");
                     for (Map.Entry<String, String> entry : transferOwners.entrySet()) {
                         System.err.println("  - transferId=" + entry.getKey() + ", owner=" + entry.getValue() + 
@@ -336,9 +339,14 @@ public class UnifiedServer {
                     ctx.channel().writeAndFlush(new TextWebSocketFrame("BUSY:MAX_TRANSFERS"));
                     return;
                 }
+                
+                // Check per-user limit for fairness
+                if (userActiveTransfers >= MAX_TRANSFERS_PER_USER) {
+                    System.err.println("[TRANSFER] ❌ BUSY:MAX_TRANSFERS (per-user limit " + MAX_TRANSFERS_PER_USER + ") for sender=" + senderToken);
+                    ctx.channel().writeAndFlush(new TextWebSocketFrame("BUSY:MAX_TRANSFERS"));
+                    return;
+                }
                 String[] parts = message.split(":", 6);
-                System.out.println("[FILE_INFO] parts: " + parts);
-                System.out.println("[FILE_INFO] parts.length: " + parts.length);
                 if (parts.length >= 5) {
                     String transferId = parts[1];
                     String filename = parts[2];
@@ -350,9 +358,10 @@ public class UnifiedServer {
                     fileTransferSize.put(transferId, 0L);
                     fileExpectedSize.put(transferId, expectedSize);
 
-                    System.out.println("[TRANSFER] Start file transfer: transferId=" + transferId +
-                            ", filename=" + filename + ", expectedSize=" + expectedSize + ", sender=" + senderToken +
-                            ", previewUri=" + previewUri);
+                    // Only log if file size is suspicious (0 or very large)
+                    if (expectedSize == 0 || expectedSize > 500 * 1024 * 1024) {
+                        System.out.println("[TRANSFER] Starting transfer: " + filename + " (size=" + expectedSize + ")");
+                    }
 
                     // Check target BEFORE opening file stream to avoid leaks
                     String targetToken = tokenPairs.get(senderToken);
@@ -376,8 +385,6 @@ public class UnifiedServer {
                         activeFileStreams.put(transferId, fos);
                         activeFileNames.put(transferId, filename);
                         transferOwners.put(transferId, senderToken); // Track who owns this transfer
-
-                        System.out.println("[TRANSFER] File stream opened for: " + filename + " (transferId=" + transferId + ", owner=" + senderToken + ", active: " + activeFileStreams.size() + "/" + MAX_ACTIVE_TRANSFERS + ")");
 
                     } catch (Exception e) {
 
@@ -478,10 +485,6 @@ public class UnifiedServer {
 
                 target.writeAndFlush(new TextWebSocketFrame("FILE_END:" + transferId));
                 ctx.channel().writeAndFlush(new TextWebSocketFrame("FILE_RECEIVED:" + transferId));
-
-                // NOTE: SLOT_FREE is now sent when PC confirms FILE_RECEIVED, not here
-                // This prevents race condition where Android sends new file before PC confirms receipt
-                System.out.println("[TRANSFER] FILE_END processed, waiting for PC confirmation: " + transferId + " (active: " + activeFileStreams.size() + "/" + MAX_ACTIVE_TRANSFERS + ")");
             } else if (message.equals("DELETE_PAIRING")) {
                 String pairToken = tokenPairs.remove(senderToken);
                 if (pairToken != null) {
@@ -523,12 +526,8 @@ public class UnifiedServer {
                 }
                 target.writeAndFlush(new TextWebSocketFrame("FILE_RECEIVED:" + transferId));
 
-                System.out.println("[TRANSFER] ✅ FILE_RECEIVED relayed to target: " + targetToken + " transferId=" + transferId);
-
                 // NOW send SLOT_FREE to the sender (Android) - PC has confirmed receipt!
                 target.writeAndFlush(new TextWebSocketFrame("SLOT_FREE"));
-                System.out.println("[TRANSFER] ✅ SLOT_FREE sent to " + targetToken + " after PC confirmation");
-                System.out.println("[CAPACITY] After SLOT_FREE: active streams: " + activeFileStreams.size() + "/" + MAX_ACTIVE_TRANSFERS);
 
             } else if (message.startsWith("FILE_LIST:")) {
                 String fileListJson = message.substring("FILE_LIST:".length());
