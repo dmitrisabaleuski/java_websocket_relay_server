@@ -485,6 +485,7 @@ public class UnifiedServer {
 
                 target.writeAndFlush(new TextWebSocketFrame("FILE_END:" + transferId));
                 ctx.channel().writeAndFlush(new TextWebSocketFrame("FILE_RECEIVED:" + transferId));
+                System.out.println("[TRANSFER] >>> FILE_END sent to PC, FILE_RECEIVED sent to Android");
             } else if (message.equals("DELETE_PAIRING")) {
                 String pairToken = tokenPairs.remove(senderToken);
                 if (pairToken != null) {
@@ -508,6 +509,9 @@ public class UnifiedServer {
             } else if (message.startsWith("FILE_RECEIVED:")) {
                 String[] parts = message.split(":", 2);
                 String transferId = parts[1];
+                
+                System.out.println("[TRANSFER] <<< FILE_RECEIVED from PC (transferId=" + transferId + ")");
+                
                 String targetToken = tokenPairs.get(senderToken);
                 if (targetToken == null) {
 
@@ -528,6 +532,7 @@ public class UnifiedServer {
 
                 // NOW send SLOT_FREE to the sender (Android) - PC has confirmed receipt!
                 target.writeAndFlush(new TextWebSocketFrame("SLOT_FREE"));
+                System.out.println("[TRANSFER] >>> SLOT_FREE sent to Android (active: " + activeFileStreams.size() + "/20)");
 
             } else if (message.startsWith("FILE_LIST:")) {
                 String fileListJson = message.substring("FILE_LIST:".length());
