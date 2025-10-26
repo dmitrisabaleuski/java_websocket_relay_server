@@ -30,6 +30,7 @@ public class UnifiedServer {
 
     private static final Map<String, String> tokenPairs = new ConcurrentHashMap<>();
     private static final Map<String, Channel> clients = new ConcurrentHashMap<>();
+    private static final Map<String, Channel> pendingPairChecks = new ConcurrentHashMap<>();
     private static final Map<String, Long> fileTransferSize = new ConcurrentHashMap<>();
     private static final Map<String, Long> fileExpectedSize = new ConcurrentHashMap<>();
     private static final Map<String, OutputStream> activeFileStreams = new ConcurrentHashMap<>();
@@ -45,6 +46,9 @@ public class UnifiedServer {
         int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "8080"));
         File uploads = new File(UPLOADS_DIR);
         if (!uploads.exists()) uploads.mkdirs();
+        
+        // Load pairings on startup
+        UnifiedServerHandler.loadPairings();
 
         EventLoopGroup bossGroup = new NioEventLoopGroup(1);
         EventLoopGroup workerGroup = new NioEventLoopGroup();
@@ -140,9 +144,20 @@ public class UnifiedServer {
     static class UnifiedServerHandler extends SimpleChannelInboundHandler<Object> {
         private WebSocketServerHandshaker handshaker;
         private String userId;
+        private static boolean pairingsLoaded = false;
 
         @Override
         public void channelRead0(ChannelHandlerContext ctx, Object msg) throws Exception {
+            // Load pairings on first connection if not already loaded
+            if (!pairingsLoaded) {
+                synchronized (UnifiedServerHandler.class) {
+                    if (!pairingsLoaded) {
+                        loadPairings();
+                        pairingsLoaded = true;
+                    }
+                }
+            }
+            
             if (msg instanceof FullHttpRequest) {
                 FullHttpRequest req = (FullHttpRequest) msg;
                 if ("/api/token".equalsIgnoreCase(req.uri()) && req.method() == HttpMethod.POST) {
@@ -213,16 +228,22 @@ public class UnifiedServer {
                     return;
                 }
                 Algorithm algorithm = Algorithm.HMAC256(SECRET);
+                
+                // Token expires in 7 days for security
+                java.util.Date now = new java.util.Date();
+                java.util.Date expiresAt = new java.util.Date(now.getTime() + (7L * 24 * 60 * 60 * 1000)); // 7 days
+                
                 String token = JWT.create()
                         .withSubject(userId)
-                        .withIssuedAt(new java.util.Date())
+                        .withIssuedAt(now)
+                        .withExpiresAt(expiresAt)
                         .sign(algorithm);
+                
+                System.out.println("[TOKEN] Issued JWT for userId=" + userId + ", expires in 7 days");
                 ByteBuf content = Unpooled.copiedBuffer(token, CharsetUtil.UTF_8);
                 FullHttpResponse resp = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK, content);
                 resp.headers().set(CONTENT_TYPE, "text/plain");
                 resp.headers().setInt(CONTENT_LENGTH, content.readableBytes());
-
-                System.out.println("[TOKEN] Issued JWT for userId=" + userId);
 
                 sendHttpResponse(ctx, req, resp);
             } catch (Exception e) {
@@ -357,10 +378,12 @@ public class UnifiedServer {
                 }
 
             } else if (message.startsWith("REGISTER_PAIR:")) {
-                String[] parts = message.split(":", 3);
-                if (parts.length == 3) {
+                String[] parts = message.split(":", 4);
+                if (parts.length >= 3) {
                     String androidToken = parts[1];
                     String pcToken = parts[2];
+                    String sharedSecret = parts.length > 3 ? parts[3] : null;
+                    
                     String androidUserId = getUserIdFromToken(androidToken);
                     String pcUserId = getUserIdFromToken(pcToken);
                     if (androidUserId == null || pcUserId == null) {
@@ -372,12 +395,23 @@ public class UnifiedServer {
                     }
                     tokenPairs.put(pcUserId, androidUserId);
                     tokenPairs.put(androidUserId, pcUserId);
+                    savePairings(); // Save pairings to file
+                    System.out.println("[PAIR] Registered pair: PC=" + pcUserId + " <-> Android=" + androidUserId);
 
                     Channel androidCh = clients.get(androidUserId);
                     Channel pcCh = clients.get(pcUserId);
                     System.err.println("IS TOKENS EXIST: ANDROID" + androidToken + " PC: " + pcToken + " PART: " + parts);
-                    if (androidCh != null) androidCh.writeAndFlush(new TextWebSocketFrame("PAIR_REGISTERED:" + pcUserId));
-                    if (pcCh != null) pcCh.writeAndFlush(new TextWebSocketFrame("PAIR_REGISTERED:" + androidUserId));
+                    
+                    // Send pairing confirmation with shared secret if provided
+                    if (sharedSecret != null && !sharedSecret.isEmpty()) {
+                        System.out.println("[PAIR] Pairing with E2E encryption enabled");
+                        if (androidCh != null) androidCh.writeAndFlush(new TextWebSocketFrame("PAIR_REGISTERED:" + pcUserId + ":" + sharedSecret));
+                        if (pcCh != null) pcCh.writeAndFlush(new TextWebSocketFrame("PAIR_REGISTERED:" + androidUserId + ":" + sharedSecret));
+                    } else {
+                        System.out.println("[PAIR] Pairing without E2E encryption (legacy mode)");
+                        if (androidCh != null) androidCh.writeAndFlush(new TextWebSocketFrame("PAIR_REGISTERED:" + pcUserId));
+                        if (pcCh != null) pcCh.writeAndFlush(new TextWebSocketFrame("PAIR_REGISTERED:" + androidUserId));
+                    }
                 } else {
 
                     System.err.println("[PAIR] Invalid REGISTER_PAIR format: " + message);
@@ -429,6 +463,7 @@ public class UnifiedServer {
                 String pairToken = tokenPairs.remove(senderToken);
                 if (pairToken != null) {
                     tokenPairs.remove(pairToken);
+                    savePairings(); // Save pairings after deletion
                     Channel pairCh = clients.get(pairToken);
                     if (pairCh != null) {
                         pairCh.writeAndFlush(new TextWebSocketFrame("PAIR_DELETED:" + senderToken));
@@ -606,16 +641,44 @@ public class UnifiedServer {
             } else if (message.startsWith("IS_PAIRED:")) {
                 String pcToken = message.substring("IS_PAIRED:".length()).trim();
                 String androidToken = tokenPairs.get(pcToken);
+                
                 if (androidToken != null) {
-
-                    System.out.println("[PAIR] Pair exists for pcToken=" + pcToken);
-
-                    ctx.channel().writeAndFlush(new TextWebSocketFrame("PAIR_STATUS:YES"));
+                    // Check if Android is actually online
+                    Channel androidChannel = clients.get(androidToken);
+                    
+                    if (androidChannel != null && androidChannel.isActive()) {
+                        System.out.println("[PAIR] Forwarding IS_PAIRED check to Android for pcToken=" + pcToken);
+                        
+                        // Forward to Android and wait for confirmation
+                        androidChannel.writeAndFlush(new TextWebSocketFrame("IS_PAIRED:" + pcToken));
+                        pendingPairChecks.put(pcToken, ctx.channel());
+                    } else {
+                        System.out.println("[PAIR] Pair exists but Android offline for pcToken=" + pcToken);
+                        ctx.channel().writeAndFlush(new TextWebSocketFrame("PAIR_STATUS:NO"));
+                    }
                 } else {
-
                     System.out.println("[PAIR] No pair for pcToken=" + pcToken);
-
                     ctx.channel().writeAndFlush(new TextWebSocketFrame("PAIR_STATUS:NO"));
+                }
+            } else if (message.startsWith("PAIR_CONFIRMED:")) {
+                // Android confirmed pairing
+                String[] parts = message.split(":");
+                if (parts.length >= 3) {
+                    String androidToken = parts[1];
+                    String pcToken = parts[2];
+                    
+                    System.out.println("[PAIR] Received PAIR_CONFIRMED from Android: androidToken=" + androidToken + ", pcToken=" + pcToken);
+                    
+                    // Restore pairing in memory
+                    tokenPairs.put(pcToken, androidToken);
+                    savePairings();
+                    
+                    // Notify PC client
+                    Channel pcChannel = pendingPairChecks.remove(pcToken);
+                    if (pcChannel != null && pcChannel.isActive()) {
+                        pcChannel.writeAndFlush(new TextWebSocketFrame("PAIR_STATUS:YES"));
+                        System.out.println("[PAIR] Sent PAIR_STATUS:YES to PC");
+                    }
                 }
             } else {
 
@@ -753,6 +816,53 @@ public class UnifiedServer {
 
             cause.printStackTrace();
             ctx.close();
+        }
+        
+        /**
+         * Save pairings to file for persistence across server restarts
+         */
+        private static void savePairings() {
+            try {
+                File file = new File("pairings.json");
+                com.google.gson.Gson gson = new com.google.gson.Gson();
+                String json = gson.toJson(tokenPairs);
+                
+                try (java.io.FileWriter writer = new java.io.FileWriter(file)) {
+                    writer.write(json);
+                }
+                
+                System.out.println("[PERSISTENCE] Saved " + tokenPairs.size() + " pairings to pairings.json");
+            } catch (Exception e) {
+                System.err.println("[PERSISTENCE] Error saving pairings: " + e.getMessage());
+                e.printStackTrace();
+            }
+        }
+        
+        /**
+         * Load pairings from file on server startup
+         */
+        private static void loadPairings() {
+            try {
+                File file = new File("pairings.json");
+                if (!file.exists()) {
+                    System.out.println("[PERSISTENCE] No pairings file found, starting fresh");
+                    return;
+                }
+                
+                com.google.gson.Gson gson = new com.google.gson.Gson();
+                java.io.FileReader reader = new java.io.FileReader(file);
+                java.lang.reflect.Type type = new com.google.gson.reflect.TypeToken<java.util.Map<String, String>>(){}.getType();
+                Map<String, String> loaded = gson.fromJson(reader, type);
+                reader.close();
+                
+                if (loaded != null) {
+                    tokenPairs.putAll(loaded);
+                    System.out.println("[PERSISTENCE] Loaded " + loaded.size() + " pairings from pairings.json");
+                }
+            } catch (Exception e) {
+                System.err.println("[PERSISTENCE] Error loading pairings: " + e.getMessage());
+                e.printStackTrace();
+            }
         }
     }
 }
