@@ -35,6 +35,7 @@ public class UnifiedServer {
     private static final Map<String, Long> fileExpectedSize = new ConcurrentHashMap<>();
     private static final Map<String, OutputStream> activeFileStreams = new ConcurrentHashMap<>();
     private static final Map<String, String> activeFileNames = new ConcurrentHashMap<>();
+    private static final Map<String, String> transferOwners = new ConcurrentHashMap<>(); // transferId -> userId (who initiated transfer)
     private final Map<String, ByteArrayOutputStream> fileBuffers = new ConcurrentHashMap<>();
     private static final int MAX_ACTIVE_TRANSFERS = 20;
     
@@ -366,8 +367,9 @@ public class UnifiedServer {
                         OutputStream fos = new FileOutputStream(new File(uploadsDir, filename));
                         activeFileStreams.put(transferId, fos);
                         activeFileNames.put(transferId, filename);
+                        transferOwners.put(transferId, senderToken); // Track who owns this transfer
 
-                        System.out.println("[TRANSFER] File stream opened for: " + filename + " (active: " + activeFileStreams.size() + "/" + MAX_ACTIVE_TRANSFERS + ")");
+                        System.out.println("[TRANSFER] File stream opened for: " + filename + " (transferId=" + transferId + ", owner=" + senderToken + ", active: " + activeFileStreams.size() + "/" + MAX_ACTIVE_TRANSFERS + ")");
 
                     } catch (Exception e) {
 
@@ -433,11 +435,12 @@ public class UnifiedServer {
 
                 OutputStream fos = activeFileStreams.remove(transferId);
                 String fileName = activeFileNames.remove(transferId);
+                String owner = transferOwners.remove(transferId); // Remove owner tracking
                 if (fos != null) {
                     try {
                         fos.close();
 
-                        System.out.println("[TRANSFER] File saved: " + fileName + " (transferId=" + transferId + ", active: " + activeFileStreams.size() + "/" + MAX_ACTIVE_TRANSFERS + ")");
+                        System.out.println("[TRANSFER] File saved: " + fileName + " (transferId=" + transferId + ", owner=" + owner + ", active: " + activeFileStreams.size() + "/" + MAX_ACTIVE_TRANSFERS + ")");
 
                     } catch (Exception e) {
 
@@ -817,30 +820,36 @@ public class UnifiedServer {
 
                 System.out.println("[SERVER] Client disconnected: userId=" + toRemove);
                 
-                // Clean up active file streams for this user
+                // Clean up active file streams ONLY for this specific user
                 int cleanedStreams = 0;
                 java.util.Iterator<Map.Entry<String, OutputStream>> iterator = activeFileStreams.entrySet().iterator();
                 while (iterator.hasNext()) {
                     Map.Entry<String, OutputStream> entry = iterator.next();
                     String transferId = entry.getKey();
+                    String owner = transferOwners.get(transferId);
                     
-                    // Close the stream and remove it
-                    try {
-                        entry.getValue().close();
-                        cleanedStreams++;
-                        System.out.println("[CLEANUP] Closed active stream for transferId: " + transferId);
-                    } catch (Exception e) {
-                        System.err.println("[CLEANUP] Error closing stream: " + e.getMessage());
+                    // Only clean up streams that belong to THIS disconnected user
+                    if (toRemove.equals(owner)) {
+                        try {
+                            entry.getValue().close();
+                            cleanedStreams++;
+                            System.out.println("[CLEANUP] Closed active stream for transferId: " + transferId + " (owner: " + owner + ")");
+                        } catch (Exception e) {
+                            System.err.println("[CLEANUP] Error closing stream: " + e.getMessage());
+                        }
+                        
+                        iterator.remove();
+                        activeFileNames.remove(transferId);
+                        transferOwners.remove(transferId);
+                        fileTransferSize.remove(transferId);
+                        fileExpectedSize.remove(transferId);
                     }
-                    
-                    iterator.remove();
-                    activeFileNames.remove(transferId);
-                    fileTransferSize.remove(transferId);
-                    fileExpectedSize.remove(transferId);
                 }
                 
                 if (cleanedStreams > 0) {
-                    System.out.println("[CLEANUP] Cleaned " + cleanedStreams + " active streams for disconnected user: " + toRemove);
+                    System.out.println("[CLEANUP] Cleaned " + cleanedStreams + " active streams for disconnected user: " + toRemove + " (active: " + activeFileStreams.size() + "/" + MAX_ACTIVE_TRANSFERS + ")");
+                } else {
+                    System.out.println("[CLEANUP] No active streams found for disconnected user: " + toRemove);
                 }
 
             }else {
