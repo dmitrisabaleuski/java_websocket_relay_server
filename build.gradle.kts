@@ -12,6 +12,12 @@ dependencies {
     implementation("org.json:json:20240303")
     implementation("com.auth0:java-jwt:4.4.0")
     implementation("com.google.code.gson:gson:2.10.1")
+    
+    // PostgreSQL JDBC Driver
+    implementation("org.postgresql:postgresql:42.7.1")
+    
+    // Connection Pooling (HikariCP - fast and lightweight)
+    implementation("com.zaxxer:HikariCP:5.0.1")
 }
 
 tasks {

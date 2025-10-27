@@ -60,8 +60,13 @@ public class UnifiedServer {
         File uploads = new File(UPLOADS_DIR);
         if (!uploads.exists()) uploads.mkdirs();
         
-        // Load pairings on startup
-        UnifiedServerHandler.loadPairings();
+        // Initialize database connection
+        DatabaseManager.initialize();
+        AdminLogger.info("SERVER", "Database initialized");
+        
+        // Load pairings from database into memory
+        DatabaseManager.loadAllPairs(tokenPairs);
+        AdminLogger.info("SERVER", "Loaded " + (tokenPairs.size() / 2) + " pairs from database");
 
         EventLoopGroup bossGroup = new NioEventLoopGroup(1);
         EventLoopGroup workerGroup = new NioEventLoopGroup();
@@ -543,7 +548,9 @@ public class UnifiedServer {
                     }
                     tokenPairs.put(pcUserId, androidUserId);
                     tokenPairs.put(androidUserId, pcUserId);
-                    savePairings(); // Save pairings to file
+                    
+                    // Save to database
+                    DatabaseManager.registerPair(pcUserId, androidUserId, sharedSecret);
                     
                     // Track pair info for admin panel
                     PairManager.registerPair(pcUserId, androidUserId);
@@ -588,8 +595,16 @@ public class UnifiedServer {
                         String targetToken = tokenPairs.get(senderToken);
                         String targetClient = targetToken != null ? "Android" : "Unknown";
                         long actualSize = fileTransferSize.getOrDefault(transferId, 0L);
+                        
+                        // Log to AuditLogger (in-memory)
                         AuditLogger.logFileTransfer(senderToken, fileName, actualSize, "PC", targetClient, clientIP, true, 
                             "Transfer completed successfully");
+                        
+                        // Save to database
+                        if (targetToken != null) {
+                            DatabaseManager.recordFileTransfer(senderToken, targetToken, fileName, actualSize,
+                                "PC", targetClient, clientIP, true, "Transfer completed successfully");
+                        }
                         
                     } catch (Exception e) {
                         AdminLogger.error("TRANSFER", "Error closing file: " + e.getMessage());
@@ -637,7 +652,9 @@ public class UnifiedServer {
                 String pairToken = tokenPairs.remove(senderToken);
                 if (pairToken != null) {
                     tokenPairs.remove(pairToken);
-                    savePairings(); // Save pairings after deletion
+                    
+                    // Delete from database
+                    DatabaseManager.deletePair(senderToken, pairToken);
                     
                     // Unregister from PairManager
                     PairManager.unregisterPair(senderToken, pairToken);
