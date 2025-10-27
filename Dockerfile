@@ -4,7 +4,9 @@ FROM gradle:8.5.0-jdk21 AS build
 WORKDIR /app
 
 # Copy Gradle files first (for better caching)
-COPY settings.gradle.kts build.gradle.kts gradle gradlew ./
+COPY settings.gradle.kts build.gradle.kts ./
+COPY gradle ./gradle
+COPY gradlew ./
 RUN chmod +x ./gradlew
 RUN mkdir -p src/main/java src/main/resources
 
