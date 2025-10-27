@@ -14,6 +14,8 @@ import io.netty.handler.codec.http.websocketx.*;
 import io.netty.handler.stream.ChunkedWriteHandler;
 import io.netty.util.CharsetUtil;
 import org.json.JSONObject;
+import org.example.admin.AdminWebInterface;
+import org.example.admin.PairManager;
 
 import java.io.*;
 import io.netty.channel.Channel;
@@ -25,6 +27,12 @@ import static io.netty.handler.codec.http.HttpHeaderNames.*;
 
 public class UnifiedServer {
 
+    // ⚠️ SECURITY WARNING: JWT_SECRET MUST be set as environment variable!
+    // The default value is ONLY for development/testing.
+    // For production: 
+    // 1. Generate a strong random secret (32+ characters)
+    // 2. Set JWT_SECRET environment variable
+    // 3. NEVER commit the real secret to version control!
     private static final String SECRET = System.getenv().getOrDefault("JWT_SECRET", "eY9xh9F!j$3Kz0@VqLu7pT1cG2mNwqAr");
     private static final String UPLOADS_DIR = System.getenv().getOrDefault("UPLOADS_DIR", "uploads");
 
@@ -37,13 +45,11 @@ public class UnifiedServer {
     private static final Map<String, String> activeFileNames = new ConcurrentHashMap<>();
     private static final Map<String, String> transferOwners = new ConcurrentHashMap<>(); // transferId -> userId (who initiated transfer)
     private final Map<String, ByteArrayOutputStream> fileBuffers = new ConcurrentHashMap<>();
-    private static final int MAX_ACTIVE_TRANSFERS = 20; // Global limit - for Relay fallback
-    private static final int MAX_TRANSFERS_PER_USER = 5; // Per-user limit for better fairness
     
-    // WebRTC P2P state tracking
-    private static final Map<String, String> p2pConnectionState = new ConcurrentHashMap<>(); // pairId -> state (CONNECTING, CONNECTED, FAILED)
-    private static final Map<String, Long> p2pConnectionTimestamp = new ConcurrentHashMap<>(); // pairId -> timestamp
-    private static final long P2P_CONNECTION_TIMEOUT = 30000; // 30 seconds to establish P2P
+    // Transfer limits
+    private static final int MAX_ACTIVE_TRANSFERS = 20; // Global limit
+    private static final int MAX_TRANSFERS_PER_USER = 5; // Per-user limit for better fairness
+    private static final long MAX_FILE_SIZE = 500L * 1024L * 1024L; // 500 MB maximum file size
     
     // PING/PONG heartbeat system
     private static final java.util.Timer heartbeatTimer = new java.util.Timer(true);
@@ -76,11 +82,11 @@ public class UnifiedServer {
                         }
                     });
 
-            System.out.println("[SERVER] Netty server started on port " + port);
+            AdminLogger.info("SERVER", "Netty server started on port " + port);
             
             // Start heartbeat timer
             startHeartbeatTimer();
-            System.out.println("[SERVER] Heartbeat timer started with interval: " + HEARTBEAT_INTERVAL + "ms");
+            AdminLogger.info("SERVER", "Heartbeat timer started with interval: " + HEARTBEAT_INTERVAL + "ms");
 
             b.bind(port).sync().channel().closeFuture().sync();
         } finally {
@@ -117,7 +123,7 @@ public class UnifiedServer {
     }
     
     /**
-     * Send PING to all connected clients
+     * Send PING to all connected clients and cleanup stale data
      */
     private static void sendHeartbeatToAllClients() {
         if (clients.isEmpty()) {
@@ -146,12 +152,35 @@ public class UnifiedServer {
                 System.out.println("[HEARTBEAT] Removed inactive channel for userId: " + userId);
             }
         }
+        
+        // MEMORY LEAK FIX: Cleanup stale pending pair checks
+        int cleaned = 0;
+        java.util.Iterator<Map.Entry<String, Channel>> iterator = pendingPairChecks.entrySet().iterator();
+        while (iterator.hasNext()) {
+            Map.Entry<String, Channel> entry = iterator.next();
+            Channel channel = entry.getValue();
+            
+            // Remove if channel is no longer active
+            if (channel == null || !channel.isActive()) {
+                iterator.remove();
+                cleaned++;
+            }
+        }
+        
+        if (cleaned > 0) {
+            System.out.println("[HEARTBEAT] Cleaned " + cleaned + " stale pending pair checks");
+        }
     }
 
     static class UnifiedServerHandler extends SimpleChannelInboundHandler<Object> {
         private WebSocketServerHandshaker handshaker;
         private String userId;
         private static boolean pairingsLoaded = false;
+        private AdminWebInterface adminInterface;
+
+        public UnifiedServerHandler() {
+            this.adminInterface = new AdminWebInterface(tokenPairs, clients, UnifiedServerHandler::savePairings);
+        }
 
         @Override
         public void channelRead0(ChannelHandlerContext ctx, Object msg) throws Exception {
@@ -167,12 +196,20 @@ public class UnifiedServer {
             
             if (msg instanceof FullHttpRequest) {
                 FullHttpRequest req = (FullHttpRequest) msg;
+                
+                // Admin interface routes (check first)
+                if (req.uri().startsWith("/admin")) {
+                    if (adminInterface.handleAdminRequest(ctx, req)) {
+                        return; // Request handled by admin interface
+                    }
+                }
+                
                 if ("/api/token".equalsIgnoreCase(req.uri()) && req.method() == HttpMethod.POST) {
                     handleTokenRequest(ctx, req);
                 } else if ("websocket".equalsIgnoreCase(req.headers().get("Upgrade"))) {
                     handleWebSocketHandshake(ctx, req);
                 } else if ("/health".equalsIgnoreCase(req.uri()) && req.method() == HttpMethod.GET) {
-                    sendHttpResponse(ctx, req, new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK));
+                    handleHealthCheck(ctx, req);
                 } else {
                     sendHttpResponse(ctx, req, new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.NOT_FOUND));
                 }
@@ -184,11 +221,9 @@ public class UnifiedServer {
                         if (message.startsWith("AUTH:")) {
                             String jwt = message.substring("AUTH:".length());
 
-                            System.out.println("[AUTH] Received AUTH for JWT: " + jwt);
-
                             userId = getUserIdFromToken(jwt);
                             if (userId == null) {
-                                System.err.println("[AUTH] Invalid or expired JWT, userId=null");
+                                AdminLogger.warn("AUTH", "Invalid or expired JWT from: " + ctx.channel().remoteAddress());
                                 ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:TOKEN_EXPIRED"));
                                 ctx.close();
                                 return;
@@ -196,13 +231,11 @@ public class UnifiedServer {
                             clients.put(userId, ctx.channel());
                             ctx.channel().writeAndFlush(new TextWebSocketFrame("REGISTERED:" + userId));
 
-                            System.out.println("[AUTH] Client registered: userId=" + userId + ", remote=" + ctx.channel().remoteAddress());
+                            AdminLogger.info("AUTH", "Client registered: userId=" + userId + ", address=" + ctx.channel().remoteAddress());
 
                             return;
                         } else {
-
-                            System.err.println("[AUTH] Invalid JWT, userId=null");
-
+                            AdminLogger.warn("AUTH", "Authentication failed - no AUTH message from: " + ctx.channel().remoteAddress());
                             ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Invalid JWT"));
                             ctx.close();
                             return;
@@ -227,20 +260,32 @@ public class UnifiedServer {
                 String body = req.content().toString(CharsetUtil.UTF_8);
                 JSONObject json = new JSONObject(body);
                 String userId = json.optString("userId");
+                
+                // SECURITY: Validate userId
                 if (userId == null || userId.isEmpty()) {
-
-                    System.err.println("[TOKEN] Unauthorized token request, userId missing");
-
+                    AdminLogger.security("TOKEN", "Unauthorized token request - userId missing from: " + ctx.channel().remoteAddress());
                     sendHttpResponse(ctx, req, new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.UNAUTHORIZED));
+                    return;
+                }
+                
+                if (userId.length() > 100) {
+                    AdminLogger.security("TOKEN", "userId too long (" + userId.length() + " chars) from: " + ctx.channel().remoteAddress());
+                    sendHttpResponse(ctx, req, new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.BAD_REQUEST));
+                    return;
+                }
+                
+                if (!userId.matches("^[a-zA-Z0-9_-]+$")) {
+                    AdminLogger.security("TOKEN", "userId contains invalid characters: " + userId + " from: " + ctx.channel().remoteAddress());
+                    sendHttpResponse(ctx, req, new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.BAD_REQUEST));
                     return;
                 }
                 
                 // Get expiration hours from request (default: 7 days = 168 hours)
                 long expirationHours = json.optLong("expirationHours", 168L);
                 
-                // Validate expiration (minimum 1 hour, maximum 1 year)
+                // SECURITY: Validate expiration (minimum 1 hour, maximum 30 days)
                 if (expirationHours < 1) expirationHours = 1L;
-                if (expirationHours > 8760) expirationHours = 8760L; // Max 1 year
+                if (expirationHours > 720) expirationHours = 720L; // Max 30 days (more secure than 1 year)
                 
                 Algorithm algorithm = Algorithm.HMAC256(SECRET);
                 
@@ -253,17 +298,43 @@ public class UnifiedServer {
                         .withExpiresAt(expiresAt)
                         .sign(algorithm);
                 
-                System.out.println("[TOKEN] Issued JWT for userId=" + userId + ", expires in " + expirationHours + " hours (" + (expirationHours / 24) + " days)");
+                AdminLogger.info("TOKEN", "Issued JWT for userId=" + userId + ", expires in " + expirationHours + " hours (" + (expirationHours / 24) + " days)");
                 ByteBuf content = Unpooled.copiedBuffer(token, CharsetUtil.UTF_8);
                 FullHttpResponse resp = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK, content);
                 resp.headers().set(CONTENT_TYPE, "text/plain");
                 resp.headers().setInt(CONTENT_LENGTH, content.readableBytes());
 
                 sendHttpResponse(ctx, req, resp);
+            } catch (IllegalArgumentException e) {
+                AdminLogger.error("TOKEN", "Invalid request parameters: " + e.getMessage());
+                sendHttpResponse(ctx, req, new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.BAD_REQUEST));
             } catch (Exception e) {
+                AdminLogger.error("TOKEN", "Server error issuing JWT: " + e.getMessage());
+                e.printStackTrace();
+                sendHttpResponse(ctx, req, new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.INTERNAL_SERVER_ERROR));
+            }
+        }
 
-                System.err.println("[TOKEN] Failed to issue JWT: " + e.getMessage());
-
+        private void handleHealthCheck(ChannelHandlerContext ctx, FullHttpRequest req) {
+            try {
+                JSONObject health = new JSONObject();
+                health.put("status", "UP");
+                health.put("connectedClients", clients.size());
+                health.put("activePairings", tokenPairs.size() / 2); // Divide by 2 because each pair is stored twice
+                health.put("activeTransfers", activeFileStreams.size());
+                health.put("maxTransfers", MAX_ACTIVE_TRANSFERS);
+                health.put("maxTransfersPerUser", MAX_TRANSFERS_PER_USER);
+                health.put("maxFileSizeMB", MAX_FILE_SIZE / 1024 / 1024);
+                health.put("uptime", ServerStatistics.getUptime());
+                
+                ByteBuf content = Unpooled.copiedBuffer(health.toString(), CharsetUtil.UTF_8);
+                FullHttpResponse resp = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK, content);
+                resp.headers().set(CONTENT_TYPE, "application/json");
+                resp.headers().setInt(CONTENT_LENGTH, content.readableBytes());
+                
+                sendHttpResponse(ctx, req, resp);
+            } catch (Exception e) {
+                AdminLogger.error("HEALTH", "Error generating health check: " + e.getMessage());
                 sendHttpResponse(ctx, req, new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.INTERNAL_SERVER_ERROR));
             }
         }
@@ -358,15 +429,52 @@ public class UnifiedServer {
                     String size = parts[3];
                     String previewUri = parts.length > 5 ? parts[5] : null;
 
-                    long expectedSize = Long.parseLong(size);
+                    // SECURITY: Validate filename to prevent path traversal attacks
+                    if (filename == null || filename.isEmpty()) {
+                        AdminLogger.security("VALIDATION", "Empty filename rejected from user: " + senderToken);
+                        ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Invalid filename"));
+                        return;
+                    }
+                    
+                    if (filename.contains("..") || filename.contains("/") || filename.contains("\\")) {
+                        AdminLogger.security("VALIDATION", "Path traversal attempt blocked: " + filename + " from user: " + senderToken);
+                        ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Invalid filename - path traversal"));
+                        return;
+                    }
+                    
+                    // Sanitize filename - only allow safe characters
+                    String safeFilename = filename.replaceAll("[^a-zA-Z0-9._-]", "_");
+                    if (!safeFilename.equals(filename)) {
+                        AdminLogger.security("VALIDATION", "Filename sanitized: " + filename + " -> " + safeFilename);
+                        filename = safeFilename;
+                    }
+
+                    // SECURITY: Validate file size
+                    long expectedSize;
+                    try {
+                        expectedSize = Long.parseLong(size);
+                    } catch (NumberFormatException e) {
+                        AdminLogger.security("VALIDATION", "Invalid file size format: " + size + " from user: " + senderToken);
+                        ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Invalid file size"));
+                        return;
+                    }
+                    
+                    if (expectedSize <= 0) {
+                        AdminLogger.security("VALIDATION", "Invalid file size: " + expectedSize + " bytes from user: " + senderToken);
+                        ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:File size must be positive"));
+                        return;
+                    }
+                    
+                    if (expectedSize > MAX_FILE_SIZE) {
+                        AdminLogger.security("VALIDATION", "File too large rejected: " + expectedSize + " bytes (max: " + MAX_FILE_SIZE + ") from user: " + senderToken);
+                        ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:File too large (max " + (MAX_FILE_SIZE / 1024 / 1024) + "MB)"));
+                        return;
+                    }
 
                     fileTransferSize.put(transferId, 0L);
                     fileExpectedSize.put(transferId, expectedSize);
 
-                    // Only log if file size is suspicious (0 or very large)
-                    if (expectedSize == 0 || expectedSize > 500 * 1024 * 1024) {
-                        System.out.println("[TRANSFER] Starting transfer: " + filename + " (size=" + expectedSize + ")");
-                    }
+                    System.out.println("[TRANSFER] Starting transfer: " + filename + " (size=" + expectedSize + " bytes)");
 
                     // Check target BEFORE opening file stream to avoid leaks
                     String targetToken = tokenPairs.get(senderToken);
@@ -427,11 +535,14 @@ public class UnifiedServer {
                     tokenPairs.put(pcUserId, androidUserId);
                     tokenPairs.put(androidUserId, pcUserId);
                     savePairings(); // Save pairings to file
-                    System.out.println("[PAIR] Registered pair: PC=" + pcUserId + " <-> Android=" + androidUserId);
+                    
+                    // Track pair info for admin panel
+                    PairManager.registerPair(pcUserId, androidUserId);
+                    
+                    AdminLogger.info("PAIR", "Registered pair: PC=" + pcUserId + " <-> Android=" + androidUserId);
 
                     Channel androidCh = clients.get(androidUserId);
                     Channel pcCh = clients.get(pcUserId);
-                    System.err.println("IS TOKENS EXIST: ANDROID" + androidToken + " PC: " + pcToken + " PART: " + parts);
                     
                     // Send pairing confirmation with shared secret if provided
                     if (sharedSecret != null && !sharedSecret.isEmpty()) {
@@ -455,47 +566,54 @@ public class UnifiedServer {
 
                 OutputStream fos = activeFileStreams.remove(transferId);
                 String fileName = activeFileNames.remove(transferId);
-                String owner = transferOwners.remove(transferId); // Remove owner tracking
+                String owner = transferOwners.remove(transferId);
+                Long fileSize = fileExpectedSize.get(transferId);
+                
                 if (fos != null) {
                     try {
                         fos.close();
-
-                        System.out.println("[TRANSFER] File saved: " + fileName + " (transferId=" + transferId + ", owner=" + owner + ", active: " + activeFileStreams.size() + "/" + MAX_ACTIVE_TRANSFERS + ")");
-
+                        AdminLogger.info("TRANSFER", "File saved: " + fileName + " (" + (fileSize != null ? fileSize : 0) + " bytes, active: " + activeFileStreams.size() + "/" + MAX_ACTIVE_TRANSFERS + ")");
                     } catch (Exception e) {
-
-                        System.err.println("[TRANSFER] Error closing file: " + e.getMessage());
-
+                        AdminLogger.error("TRANSFER", "Error closing file: " + e.getMessage());
                     }
                 } else {
-                    System.err.println("[TRANSFER] FILE_END received but no active stream found for transferId: " + transferId);
+                    AdminLogger.warn("TRANSFER", "FILE_END received but no active stream found for transferId: " + transferId);
                 }
+                
+                // Update pair statistics
+                String targetToken = tokenPairs.get(senderToken);
+                if (targetToken != null && fileSize != null) {
+                    PairManager.recordFileTransfer(senderToken, targetToken, fileSize);
+                    PairManager.updatePairActivity(senderToken, targetToken);
+                }
+                
                 fileTransferSize.remove(transferId);
                 fileExpectedSize.remove(transferId);
 
-                String targetToken = tokenPairs.get(senderToken);
                 if (targetToken == null) {
-                    System.err.println("[TRANSFER] Target token not found for FILE_END. senderToken=" + senderToken);
+                    AdminLogger.error("TRANSFER", "Target token not found for FILE_END. senderToken=" + senderToken);
                     ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target not connected"));
                     return;
                 }
                 Channel target = clients.get(targetToken);
                 if (target == null || !target.isActive()) {
-
-                    System.err.println("[TRANSFER] Target client not connected for FILE_END. targetToken=" + targetToken);
-
+                    AdminLogger.error("TRANSFER", "Target client not connected for FILE_END. targetToken=" + targetToken);
                     ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target client not connected"));
                     return;
                 }
 
                 target.writeAndFlush(new TextWebSocketFrame("FILE_END:" + transferId));
                 ctx.channel().writeAndFlush(new TextWebSocketFrame("FILE_RECEIVED:" + transferId));
-                System.out.println("[TRANSFER] >>> FILE_END sent to PC, FILE_RECEIVED sent to Android");
+                AdminLogger.info("TRANSFER", "FILE_END sent to PC, FILE_RECEIVED sent to Android");
             } else if (message.equals("DELETE_PAIRING")) {
                 String pairToken = tokenPairs.remove(senderToken);
                 if (pairToken != null) {
                     tokenPairs.remove(pairToken);
                     savePairings(); // Save pairings after deletion
+                    
+                    // Unregister from PairManager
+                    PairManager.unregisterPair(senderToken, pairToken);
+                    
                     Channel pairCh = clients.get(pairToken);
                     if (pairCh != null) {
                         pairCh.writeAndFlush(new TextWebSocketFrame("PAIR_DELETED:" + senderToken));
@@ -503,12 +621,10 @@ public class UnifiedServer {
                     }
                     ctx.channel().writeAndFlush(new TextWebSocketFrame("PAIR_DELETED:SUCCESS"));
 
-                    System.out.println("[PAIR] Pairing deleted for sender: " + senderToken + " and pair: " + pairToken);
+                    AdminLogger.info("PAIR", "Pairing deleted by user: " + senderToken + " <-> " + pairToken);
 
                 } else {
-
-                    System.err.println("[PAIR] No pairing found for sender: " + senderToken);
-
+                    AdminLogger.warn("PAIR", "Delete pairing failed - no pairing found for: " + senderToken);
                     ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:No pairing found"));
                 }
             } else if (message.startsWith("FILE_RECEIVED:")) {
@@ -675,126 +791,6 @@ public class UnifiedServer {
                 ctx.channel().writeAndFlush(new TextWebSocketFrame("PONG"));
             } else if (message.equals("PONG")) {
                 System.out.println("[PONG] Received PONG from userId=" + senderToken);
-            
-            // ============================================
-            // WebRTC P2P Signaling Handlers
-            // ============================================
-            } else if (message.equals("WEBRTC_INIT")) {
-                // Android initiates P2P connection
-                String pcToken = tokenPairs.get(senderToken);
-                if (pcToken == null) {
-                    System.err.println("[WEBRTC] Cannot init P2P - no pairing found for sender=" + senderToken);
-                    ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Not paired"));
-                    return;
-                }
-                
-                Channel pcChannel = clients.get(pcToken);
-                if (pcChannel == null || !pcChannel.isActive()) {
-                    System.err.println("[WEBRTC] Cannot init P2P - PC offline (pcToken=" + pcToken + ")");
-                    ctx.channel().writeAndFlush(new TextWebSocketFrame("WEBRTC_PC_OFFLINE"));
-                    return;
-                }
-                
-                String pairId = senderToken + ":" + pcToken;
-                p2pConnectionState.put(pairId, "CONNECTING");
-                p2pConnectionTimestamp.put(pairId, System.currentTimeMillis());
-                
-                System.out.println("[WEBRTC] ✅ Initiating P2P connection: " + pairId);
-                
-                // Notify PC that Android wants P2P connection
-                pcChannel.writeAndFlush(new TextWebSocketFrame("WEBRTC_PEER_READY:" + senderToken));
-                ctx.channel().writeAndFlush(new TextWebSocketFrame("WEBRTC_INIT_OK"));
-                
-            } else if (message.startsWith("SDP_OFFER:")) {
-                String sdpJson = message.substring("SDP_OFFER:".length());
-                String targetToken = tokenPairs.get(senderToken);
-                
-                if (targetToken == null) {
-                    System.err.println("[WEBRTC] SDP_OFFER - no target for sender=" + senderToken);
-                    ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Not paired"));
-                    return;
-                }
-                
-                Channel target = clients.get(targetToken);
-                if (target == null || !target.isActive()) {
-                    System.err.println("[WEBRTC] SDP_OFFER - target offline (targetToken=" + targetToken + ")");
-                    ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target offline"));
-                    return;
-                }
-                
-                System.out.println("[WEBRTC] Relaying SDP_OFFER: " + senderToken + " → " + targetToken);
-                target.writeAndFlush(new TextWebSocketFrame("SDP_OFFER:" + sdpJson));
-                
-            } else if (message.startsWith("SDP_ANSWER:")) {
-                String sdpJson = message.substring("SDP_ANSWER:".length());
-                String targetToken = tokenPairs.get(senderToken);
-                
-                if (targetToken == null) {
-                    System.err.println("[WEBRTC] SDP_ANSWER - no target for sender=" + senderToken);
-                    ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Not paired"));
-                    return;
-                }
-                
-                Channel target = clients.get(targetToken);
-                if (target == null || !target.isActive()) {
-                    System.err.println("[WEBRTC] SDP_ANSWER - target offline (targetToken=" + targetToken + ")");
-                    ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target offline"));
-                    return;
-                }
-                
-                System.out.println("[WEBRTC] Relaying SDP_ANSWER: " + senderToken + " → " + targetToken);
-                target.writeAndFlush(new TextWebSocketFrame("SDP_ANSWER:" + sdpJson));
-                
-            } else if (message.startsWith("ICE_CANDIDATE:")) {
-                String candidateJson = message.substring("ICE_CANDIDATE:".length());
-                String targetToken = tokenPairs.get(senderToken);
-                
-                if (targetToken == null) {
-                    System.err.println("[WEBRTC] ICE_CANDIDATE - no target for sender=" + senderToken);
-                    return;
-                }
-                
-                Channel target = clients.get(targetToken);
-                if (target == null || !target.isActive()) {
-                    System.err.println("[WEBRTC] ICE_CANDIDATE - target offline (targetToken=" + targetToken + ")");
-                    return;
-                }
-                
-                // Relay ICE candidate to peer (no verbose logging)
-                target.writeAndFlush(new TextWebSocketFrame("ICE_CANDIDATE:" + candidateJson));
-                
-            } else if (message.equals("P2P_CONNECTED")) {
-                String targetToken = tokenPairs.get(senderToken);
-                if (targetToken != null) {
-                    String pairId = senderToken + ":" + targetToken;
-                    p2pConnectionState.put(pairId, "CONNECTED");
-                    System.out.println("[WEBRTC] ✅ P2P connection established: " + pairId);
-                    
-                    // Notify both peers
-                    Channel target = clients.get(targetToken);
-                    if (target != null && target.isActive()) {
-                        target.writeAndFlush(new TextWebSocketFrame("P2P_CONNECTED"));
-                    }
-                }
-                
-            } else if (message.equals("P2P_FAILED")) {
-                String targetToken = tokenPairs.get(senderToken);
-                if (targetToken != null) {
-                    String pairId = senderToken + ":" + targetToken;
-                    p2pConnectionState.put(pairId, "FAILED");
-                    System.out.println("[WEBRTC] ⚠️ P2P connection failed: " + pairId + " - will use Relay fallback");
-                    
-                    // Notify both peers to use Relay
-                    ctx.channel().writeAndFlush(new TextWebSocketFrame("P2P_USE_RELAY"));
-                    Channel target = clients.get(targetToken);
-                    if (target != null && target.isActive()) {
-                        target.writeAndFlush(new TextWebSocketFrame("P2P_USE_RELAY"));
-                    }
-                }
-            
-            // ============================================
-            // End of WebRTC Signaling Handlers
-            // ============================================
             } else if (message.startsWith("IS_PAIRED:")) {
                 String pcToken = message.substring("IS_PAIRED:".length()).trim();
                 String androidToken = tokenPairs.get(pcToken);
@@ -885,30 +881,26 @@ public class UnifiedServer {
                 String senderToken = userId;
                 String targetToken = tokenPairs.get(senderToken);
                 if (targetToken == null) {
-
                     System.err.println("[TRANSFER] Target token not found for FILE_DATA. senderToken=" + senderToken);
-
                     ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target not connected"));
                     return;
                 }
+                
                 Channel target = clients.get(targetToken);
                 if (target == null || !target.isActive()) {
-
                     System.err.println("[TRANSFER] Target client not connected for FILE_DATA. targetToken=" + targetToken);
-
                     ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target client not connected"));
                     return;
                 }
-                if (target != null && target.isActive()) {
-                    ByteBuf toSend = Unpooled.buffer(prefixBytes.length + chunk.length);
-                    toSend.writeBytes(prefixBytes);
-                    toSend.writeBytes(chunk);
-                    target.writeAndFlush(new BinaryWebSocketFrame(toSend));
+                
+                // Forward binary data to target (already validated above)
+                ByteBuf toSend = Unpooled.buffer(prefixBytes.length + chunk.length);
+                toSend.writeBytes(prefixBytes);
+                toSend.writeBytes(chunk);
+                target.writeAndFlush(new BinaryWebSocketFrame(toSend));
 
-                    System.out.println("[TRANSFER] Forwarded FILE_DATA chunk to target: " + targetToken +
-                            ", transferId=" + transferId + ", chunkSize=" + chunk.length);
-
-                }
+                System.out.println("[TRANSFER] Forwarded FILE_DATA chunk to target: " + targetToken +
+                        ", transferId=" + transferId + ", chunkSize=" + chunk.length);
             } else {
 
                 System.err.println("[SERVER] Unknown binary prefix received: " + prefix);
@@ -960,7 +952,7 @@ public class UnifiedServer {
             if (toRemove != null) {
                 clients.remove(toRemove);
 
-                System.out.println("[SERVER] Client disconnected: userId=" + toRemove);
+                AdminLogger.info("DISCONNECT", "Client disconnected: userId=" + toRemove);
                 
                 // Clean up active file streams ONLY for this specific user
                 int cleanedStreams = 0;
@@ -1023,9 +1015,9 @@ public class UnifiedServer {
                     writer.write(json);
                 }
                 
-                System.out.println("[PERSISTENCE] Saved " + tokenPairs.size() + " pairings to pairings.json");
+                AdminLogger.info("PERSISTENCE", "Saved " + tokenPairs.size() + " pairings to pairings.json");
             } catch (Exception e) {
-                System.err.println("[PERSISTENCE] Error saving pairings: " + e.getMessage());
+                AdminLogger.error("PERSISTENCE", "Error saving pairings: " + e.getMessage());
                 e.printStackTrace();
             }
         }
@@ -1037,7 +1029,7 @@ public class UnifiedServer {
             try {
                 File file = new File("pairings.json");
                 if (!file.exists()) {
-                    System.out.println("[PERSISTENCE] No pairings file found, starting fresh");
+                    AdminLogger.info("PERSISTENCE", "No pairings file found, starting fresh");
                     return;
                 }
                 
@@ -1049,10 +1041,20 @@ public class UnifiedServer {
                 
                 if (loaded != null) {
                     tokenPairs.putAll(loaded);
-                    System.out.println("[PERSISTENCE] Loaded " + loaded.size() + " pairings from pairings.json");
+                    AdminLogger.info("PERSISTENCE", "Loaded " + loaded.size() + " pairings from pairings.json");
+                    
+                    // Reconstruct PairManager from loaded pairings
+                    for (Map.Entry<String, String> entry : loaded.entrySet()) {
+                        String key = entry.getKey();
+                        String value = entry.getValue();
+                        // Only register once per pair (not for both directions)
+                        if (key.compareTo(value) < 0) {
+                            PairManager.registerPair(key, value);
+                        }
+                    }
                 }
             } catch (Exception e) {
-                System.err.println("[PERSISTENCE] Error loading pairings: " + e.getMessage());
+                AdminLogger.error("PERSISTENCE", "Error loading pairings: " + e.getMessage());
                 e.printStackTrace();
             }
         }
