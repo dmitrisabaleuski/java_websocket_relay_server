@@ -1,14 +1,32 @@
 # HomeCloud Relay Server
 
-This is a high-performance relay server for secure file transfer and synchronization between PC and Android clients, built with Netty (Java) and JWT authentication.
+High-performance WebSocket relay server for secure file transfer between PC and Android clients.
+
+**Built with:** Java + Netty + JWT Authentication + Admin Panel
 
 ## Features
 
-- **JWT-secured authentication:** Only authenticated clients can connect and exchange data.
-- **Pairing logic:** Each client pair (PC–Android) is isolated; file transfers and commands are only routed within a pair.
-- **WebSocket-based file transfer:** Supports large files (chunked transfer), real-time commands, and file list synchronization.
-- **Concurrent and scalable:** Uses Netty's async event loop model with thread-safe structures.
-- **Docker-ready:** Optimized for containerized deployment with multi-stage Dockerfile.
+### Core Features
+- **JWT Authentication**: Secure token-based authentication with configurable expiration
+- **Device Pairing**: QR code-based pairing with E2E encryption support
+- **File Transfer**: Efficient binary file transfer with chunked streaming
+- **Heartbeat System**: PING/PONG every 30 seconds for connection health
+- **Concurrent & Scalable**: Netty async event loop, thread-safe structures
+
+### Admin Panel 🆕
+- **Web UI**: http://your-server:8080/admin
+- **Real-time Monitoring**: Live statistics, connected clients, active pairs
+- **Pair Management**: View, delete pairs (password-protected)
+- **Client Management**: View, disconnect clients
+- **Log Viewer**: Filter, search logs (INFO/WARN/ERROR/SECURITY)
+- **Authentication**: Session-based with 30-minute timeout
+
+### Security 🔒
+- **Path Traversal Protection**: Filename validation and sanitization
+- **File Size Limits**: Maximum 500 MB per file
+- **Input Validation**: UserIds, file sizes, all inputs sanitized
+- **Rate Limiting**: Per-user transfer limits (5 concurrent)
+- **Security Logging**: All attack attempts logged and visible in admin panel
 
 ---
 
@@ -58,17 +76,47 @@ This is a high-performance relay server for secure file transfer and synchroniza
 
 ### Environment Variables
 
+#### Required for Production:
+- `JWT_SECRET` — **REQUIRED!** Secret key for signing JWT tokens (min 32 chars)
+
+#### Admin Panel:
+- `ADMIN_USERNAME` — Admin username (default: `admin`)
+- `ADMIN_PASSWORD` — Admin password (default: `admin123`) **⚠️ CHANGE THIS!**
+
+#### Optional:
 - `PORT` — Port to listen on (default: 8080)
-- `JWT_SECRET` — Secret key for signing JWT tokens (default: hardcoded in code, **should be overridden in production**)
+- `UPLOADS_DIR` — Upload directory (default: `uploads`)
+- `CONSOLE_LOGGING` — Enable console logs (default: `true`, set `false` to use web UI only)
 
 ---
 
-## Security Notes
+## Security Features
 
-- **Always use a strong JWT secret** and set it via environment variable (`JWT_SECRET`) in production!
-- Only authenticated clients can pair and exchange files.
-- Each pair is isolated; no cross-pair file access.
-- All file transfers are point-to-point via WebSocket (binary/text frames).
+### Authentication & Authorization
+- **JWT Tokens**: Configurable expiration (1 hour to 30 days max)
+- **Secure Pairing**: QR code-based with E2E encryption
+- **Per-Pair Isolation**: Each pair is isolated, no cross-pair access
+
+### Input Validation
+- **Path Traversal Protection**: Filenames validated and sanitized
+- **File Size Limits**: Maximum 500 MB per file
+- **UserId Validation**: Only alphanumeric characters allowed (max 100 chars)
+
+### Attack Prevention
+- **Security Logging**: All attack attempts logged with SECURITY level
+- **Rate Limiting**: 5 concurrent transfers per user
+- **Heartbeat System**: Automatic cleanup of dead connections
+
+### Admin Security
+- **Password Protection**: Critical operations require admin password
+- **Session Timeout**: 30 minutes of inactivity
+- **Action Logging**: All admin actions logged
+
+⚠️ **Production Checklist:**
+1. Set strong `JWT_SECRET` (32+ characters)
+2. Change `ADMIN_USERNAME` and `ADMIN_PASSWORD`
+3. Use HTTPS (not HTTP)
+4. Set `CONSOLE_LOGGING=false` to reduce log exposure
 
 ---
 
@@ -86,6 +134,58 @@ This is a high-performance relay server for secure file transfer and synchroniza
 - **WebSocket Connect:**
     - Connect to `ws://<host>:8080` with header `Authorization: Bearer <token>`.
     - Exchange pairing and file commands as per client protocol.
+
+---
+
+## Admin Panel
+
+### Access
+**URL**: `http://your-server:8080/admin`
+
+**Default Credentials**:
+- Username: `admin`
+- Password: `admin123`
+
+⚠️ **Change credentials via environment variables before deploying!**
+
+### Features
+- **Dashboard**: Real-time server statistics (clients, pairs, files, uptime)
+- **Pairs Management**: 
+  - View all pairs (active/offline)
+  - View pair statistics (files transferred, data, uptime)
+  - Delete specific pair (requires password)
+  - Delete ALL pairs (requires password)
+- **Client Management**:
+  - View connected clients with IP addresses
+  - Disconnect specific client
+- **Log Viewer**:
+  - View last 1000 logs
+  - Filter by level (INFO/WARN/ERROR/SECURITY/ADMIN)
+  - Search logs
+  - Clear logs
+  - Color-coded by severity
+
+### API Endpoints
+
+**Authentication:**
+- `POST /admin/api/login` - Login with username/password
+- `POST /admin/api/logout` - Logout
+
+**Statistics:**
+- `GET /admin/api/stats` - Server statistics
+
+**Pairs:**
+- `GET /admin/api/pairs` - List all pairs
+- `POST /admin/api/pairs/delete` - Delete specific pair (requires password)
+- `POST /admin/api/pairs/delete-all` - Delete all pairs (requires password)
+
+**Clients:**
+- `GET /admin/api/clients` - List connected clients
+- `POST /admin/api/clients/disconnect` - Disconnect client
+
+**Logs:**
+- `GET /admin/api/logs?level=INFO&search=text` - Get filtered logs
+- `POST /admin/api/logs/clear` - Clear all logs
 
 ---
 

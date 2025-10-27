@@ -498,10 +498,19 @@ public class UnifiedServer {
                         activeFileStreams.put(transferId, fos);
                         activeFileNames.put(transferId, filename);
                         transferOwners.put(transferId, senderToken); // Track who owns this transfer
-
+                        
+                        // AUDIT: Log file transfer start
+                        String clientIP = ctx.channel().remoteAddress().toString().split(":")[0];
+                        AuditLogger.logFileSent(senderToken, filename, expectedSize, "PC", clientIP, true);
+                        
                     } catch (Exception e) {
 
                         System.err.println("[TRANSFER] Failed to open file stream: " + e.getMessage());
+                        
+                        // AUDIT: Log failure
+                        String clientIP = ctx.channel().remoteAddress().toString().split(":")[0];
+                        AuditLogger.logFileSent(senderToken, filename, expectedSize, "PC", clientIP, false);
+                        
                         ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Failed to open file stream"));
                         return;
 
@@ -573,11 +582,30 @@ public class UnifiedServer {
                     try {
                         fos.close();
                         AdminLogger.info("TRANSFER", "File saved: " + fileName + " (" + (fileSize != null ? fileSize : 0) + " bytes, active: " + activeFileStreams.size() + "/" + MAX_ACTIVE_TRANSFERS + ")");
+                        
+                        // AUDIT: Log successful file transfer completion
+                        String clientIP = ctx.channel().remoteAddress().toString().split(":")[0];
+                        String targetToken = tokenPairs.get(senderToken);
+                        String targetClient = targetToken != null ? "Android" : "Unknown";
+                        long actualSize = fileTransferSize.getOrDefault(transferId, 0L);
+                        AuditLogger.logFileTransfer(senderToken, fileName, actualSize, "PC", targetClient, clientIP, true, 
+                            "Transfer completed successfully");
+                        
                     } catch (Exception e) {
                         AdminLogger.error("TRANSFER", "Error closing file: " + e.getMessage());
+                        
+                        // AUDIT: Log failure
+                        String clientIP = ctx.channel().remoteAddress().toString().split(":")[0];
+                        AuditLogger.logFileTransfer(senderToken, fileName, fileSize != null ? fileSize : 0, "PC", "Android", clientIP, false, 
+                            "Error: " + e.getMessage());
                     }
                 } else {
                     AdminLogger.warn("TRANSFER", "FILE_END received but no active stream found for transferId: " + transferId);
+                    
+                    // AUDIT: Log failure
+                    String clientIP = ctx.channel().remoteAddress().toString().split(":")[0];
+                    AuditLogger.logFileTransfer(senderToken, fileName, fileSize != null ? fileSize : 0, "PC", "Android", clientIP, false, 
+                        "No active stream found");
                 }
                 
                 // Update pair statistics
