@@ -37,8 +37,13 @@ public class UnifiedServer {
     private static final Map<String, String> activeFileNames = new ConcurrentHashMap<>();
     private static final Map<String, String> transferOwners = new ConcurrentHashMap<>(); // transferId -> userId (who initiated transfer)
     private final Map<String, ByteArrayOutputStream> fileBuffers = new ConcurrentHashMap<>();
-    private static final int MAX_ACTIVE_TRANSFERS = 20; // Global limit - for scalability should be per-user
+    private static final int MAX_ACTIVE_TRANSFERS = 20; // Global limit - for Relay fallback
     private static final int MAX_TRANSFERS_PER_USER = 5; // Per-user limit for better fairness
+    
+    // WebRTC P2P state tracking
+    private static final Map<String, String> p2pConnectionState = new ConcurrentHashMap<>(); // pairId -> state (CONNECTING, CONNECTED, FAILED)
+    private static final Map<String, Long> p2pConnectionTimestamp = new ConcurrentHashMap<>(); // pairId -> timestamp
+    private static final long P2P_CONNECTION_TIMEOUT = 30000; // 30 seconds to establish P2P
     
     // PING/PONG heartbeat system
     private static final java.util.Timer heartbeatTimer = new java.util.Timer(true);
@@ -670,6 +675,126 @@ public class UnifiedServer {
                 ctx.channel().writeAndFlush(new TextWebSocketFrame("PONG"));
             } else if (message.equals("PONG")) {
                 System.out.println("[PONG] Received PONG from userId=" + senderToken);
+            
+            // ============================================
+            // WebRTC P2P Signaling Handlers
+            // ============================================
+            } else if (message.equals("WEBRTC_INIT")) {
+                // Android initiates P2P connection
+                String pcToken = tokenPairs.get(senderToken);
+                if (pcToken == null) {
+                    System.err.println("[WEBRTC] Cannot init P2P - no pairing found for sender=" + senderToken);
+                    ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Not paired"));
+                    return;
+                }
+                
+                Channel pcChannel = clients.get(pcToken);
+                if (pcChannel == null || !pcChannel.isActive()) {
+                    System.err.println("[WEBRTC] Cannot init P2P - PC offline (pcToken=" + pcToken + ")");
+                    ctx.channel().writeAndFlush(new TextWebSocketFrame("WEBRTC_PC_OFFLINE"));
+                    return;
+                }
+                
+                String pairId = senderToken + ":" + pcToken;
+                p2pConnectionState.put(pairId, "CONNECTING");
+                p2pConnectionTimestamp.put(pairId, System.currentTimeMillis());
+                
+                System.out.println("[WEBRTC] ✅ Initiating P2P connection: " + pairId);
+                
+                // Notify PC that Android wants P2P connection
+                pcChannel.writeAndFlush(new TextWebSocketFrame("WEBRTC_PEER_READY:" + senderToken));
+                ctx.channel().writeAndFlush(new TextWebSocketFrame("WEBRTC_INIT_OK"));
+                
+            } else if (message.startsWith("SDP_OFFER:")) {
+                String sdpJson = message.substring("SDP_OFFER:".length());
+                String targetToken = tokenPairs.get(senderToken);
+                
+                if (targetToken == null) {
+                    System.err.println("[WEBRTC] SDP_OFFER - no target for sender=" + senderToken);
+                    ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Not paired"));
+                    return;
+                }
+                
+                Channel target = clients.get(targetToken);
+                if (target == null || !target.isActive()) {
+                    System.err.println("[WEBRTC] SDP_OFFER - target offline (targetToken=" + targetToken + ")");
+                    ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target offline"));
+                    return;
+                }
+                
+                System.out.println("[WEBRTC] Relaying SDP_OFFER: " + senderToken + " → " + targetToken);
+                target.writeAndFlush(new TextWebSocketFrame("SDP_OFFER:" + sdpJson));
+                
+            } else if (message.startsWith("SDP_ANSWER:")) {
+                String sdpJson = message.substring("SDP_ANSWER:".length());
+                String targetToken = tokenPairs.get(senderToken);
+                
+                if (targetToken == null) {
+                    System.err.println("[WEBRTC] SDP_ANSWER - no target for sender=" + senderToken);
+                    ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Not paired"));
+                    return;
+                }
+                
+                Channel target = clients.get(targetToken);
+                if (target == null || !target.isActive()) {
+                    System.err.println("[WEBRTC] SDP_ANSWER - target offline (targetToken=" + targetToken + ")");
+                    ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target offline"));
+                    return;
+                }
+                
+                System.out.println("[WEBRTC] Relaying SDP_ANSWER: " + senderToken + " → " + targetToken);
+                target.writeAndFlush(new TextWebSocketFrame("SDP_ANSWER:" + sdpJson));
+                
+            } else if (message.startsWith("ICE_CANDIDATE:")) {
+                String candidateJson = message.substring("ICE_CANDIDATE:".length());
+                String targetToken = tokenPairs.get(senderToken);
+                
+                if (targetToken == null) {
+                    System.err.println("[WEBRTC] ICE_CANDIDATE - no target for sender=" + senderToken);
+                    return;
+                }
+                
+                Channel target = clients.get(targetToken);
+                if (target == null || !target.isActive()) {
+                    System.err.println("[WEBRTC] ICE_CANDIDATE - target offline (targetToken=" + targetToken + ")");
+                    return;
+                }
+                
+                // Relay ICE candidate to peer (no verbose logging)
+                target.writeAndFlush(new TextWebSocketFrame("ICE_CANDIDATE:" + candidateJson));
+                
+            } else if (message.equals("P2P_CONNECTED")) {
+                String targetToken = tokenPairs.get(senderToken);
+                if (targetToken != null) {
+                    String pairId = senderToken + ":" + targetToken;
+                    p2pConnectionState.put(pairId, "CONNECTED");
+                    System.out.println("[WEBRTC] ✅ P2P connection established: " + pairId);
+                    
+                    // Notify both peers
+                    Channel target = clients.get(targetToken);
+                    if (target != null && target.isActive()) {
+                        target.writeAndFlush(new TextWebSocketFrame("P2P_CONNECTED"));
+                    }
+                }
+                
+            } else if (message.equals("P2P_FAILED")) {
+                String targetToken = tokenPairs.get(senderToken);
+                if (targetToken != null) {
+                    String pairId = senderToken + ":" + targetToken;
+                    p2pConnectionState.put(pairId, "FAILED");
+                    System.out.println("[WEBRTC] ⚠️ P2P connection failed: " + pairId + " - will use Relay fallback");
+                    
+                    // Notify both peers to use Relay
+                    ctx.channel().writeAndFlush(new TextWebSocketFrame("P2P_USE_RELAY"));
+                    Channel target = clients.get(targetToken);
+                    if (target != null && target.isActive()) {
+                        target.writeAndFlush(new TextWebSocketFrame("P2P_USE_RELAY"));
+                    }
+                }
+            
+            // ============================================
+            // End of WebRTC Signaling Handlers
+            // ============================================
             } else if (message.startsWith("IS_PAIRED:")) {
                 String pcToken = message.substring("IS_PAIRED:".length()).trim();
                 String androidToken = tokenPairs.get(pcToken);
