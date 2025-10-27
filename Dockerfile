@@ -6,15 +6,15 @@ WORKDIR /app
 # Copy Gradle files first (for better caching)
 COPY settings.gradle.kts build.gradle.kts ./
 COPY gradle ./gradle
-COPY gradlew gradlew.bat ./
-RUN chmod +x ./gradlew ./gradlew.bat
+COPY gradlew ./
+RUN chmod +x ./gradlew
 RUN mkdir -p src/main/java src/main/resources
 
 # Copy Java source code
 COPY src ./src
 
 # Build
-RUN ./gradlew shadowJar --no-daemon --stacktrace
+RUN ./gradlew shadowJar --no-daemon
 
 # Runtime stage
 FROM eclipse-temurin:21-jre
