@@ -6,8 +6,8 @@ WORKDIR /app
 # Copy Gradle files first (for better caching)
 COPY settings.gradle.kts build.gradle.kts ./
 COPY gradle ./gradle
-COPY gradlew ./
-RUN chmod +x ./gradlew
+COPY gradlew gradlew.bat ./
+RUN chmod +x ./gradlew ./gradlew.bat
 RUN mkdir -p src/main/java src/main/resources
 
 # Copy Java source code
