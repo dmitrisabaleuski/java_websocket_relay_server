@@ -46,11 +46,33 @@ public class DatabaseManager {
             return;
         }
         
+        AdminLogger.info(TAG, "DATABASE_URL found: " + DB_URL.replaceAll(":[^:@]*@", ":***@"));
+        AdminLogger.info(TAG, "DATABASE_USER: " + DB_USER);
+        AdminLogger.info(TAG, "DATABASE_PASSWORD: " + (DB_PASSWORD.isEmpty() ? "empty" : "***"));
+        
         isEnabled = true;
         
         try {
+            // Normalize JDBC URL
+            String jdbcUrl = DB_URL;
+            if (!jdbcUrl.startsWith("jdbc:")) {
+                // Accept forms like postgresql://user:pass@host:port/db
+                if (jdbcUrl.startsWith("postgresql://") || jdbcUrl.startsWith("postgres://")) {
+                    jdbcUrl = "jdbc:" + jdbcUrl.replaceFirst("^postgres://", "postgresql://");
+                } else {
+                    jdbcUrl = "jdbc:" + jdbcUrl;
+                }
+            }
+            // Ensure default sslmode=require for managed providers (Render, etc.)
+            if (!jdbcUrl.contains("sslmode=")) {
+                jdbcUrl = jdbcUrl.contains("?") ? (jdbcUrl + "&sslmode=require") : (jdbcUrl + "?sslmode=require");
+            }
+            AdminLogger.info(TAG, "Normalized JDBC URL: " + jdbcUrl.replaceAll(":[^:@]*@", ":***@"));
+
             HikariConfig config = new HikariConfig();
-            config.setJdbcUrl(DB_URL);
+            config.setJdbcUrl(jdbcUrl);
+            // Explicit driver (helps avoid "No suitable driver")
+            config.setDriverClassName("org.postgresql.Driver");
             config.setUsername(DB_USER);
             config.setPassword(DB_PASSWORD);
             config.setMaximumPoolSize(10);
@@ -62,6 +84,11 @@ public class DatabaseManager {
             
             dataSource = new HikariDataSource(config);
             AdminLogger.info(TAG, "Database connection pool initialized");
+            
+            // Test connection
+            try (Connection testConn = dataSource.getConnection()) {
+                AdminLogger.info(TAG, "Database connection test successful");
+            }
             
             // Create tables if they don't exist
             createTablesIfNotExist();
