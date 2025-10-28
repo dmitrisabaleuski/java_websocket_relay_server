@@ -712,6 +712,8 @@ public class AdminWebInterface {
 "            <button class='tab active' onclick='showTab(\"pairs\")'>Pairs</button>\n" +
 "            <button class='tab' onclick='showTab(\"clients\")'>Clients</button>\n" +
 "            <button class='tab' onclick='showTab(\"logs\")'>Logs</button>\n" +
+"            <button class='tab' onclick='showTab(\"audit\")'>Audit</button>\n" +
+"            <button class='tab' onclick='showTab(\"compliance\")'>Compliance</button>\n" +
 "        </div>\n" +
 "        \n" +
 "        <div id='pairsTab' class='content-box'>\n" +
@@ -740,6 +742,43 @@ public class AdminWebInterface {
 "                <button class='btn btn-danger' onclick='clearLogs()'>Clear Logs</button>\n" +
 "            </div>\n" +
 "            <div id='logsList'></div>\n" +
+"        </div>\n" +
+"        \n" +
+"        <div id='auditTab' class='content-box hidden'>\n" +
+"            <div class='toolbar'>\n" +
+"                <input type='text' class='search-box' id='auditSearch' placeholder='Search audit logs...' oninput='loadAuditLogs()'>\n" +
+"                <button class='filter-btn active' data-user='ALL' onclick='filterAuditLogs(this)'>ALL USERS</button>\n" +
+"                <button class='filter-btn' data-action='FILE_TRANSFER' onclick='filterAuditLogs(this)'>FILE_TRANSFER</button>\n" +
+"                <button class='filter-btn' data-action='PAIR_CREATED' onclick='filterAuditLogs(this)'>PAIR_CREATED</button>\n" +
+"                <button class='filter-btn' data-action='PAIR_DELETED' onclick='filterAuditLogs(this)'>PAIR_DELETED</button>\n" +
+"                <button class='btn btn-success' onclick='exportAuditLogs()'>Export CSV</button>\n" +
+"            </div>\n" +
+"            <div id='auditList'></div>\n" +
+"        </div>\n" +
+"        \n" +
+"        <div id='complianceTab' class='content-box hidden'>\n" +
+"            <div class='toolbar'>\n" +
+"                <button class='btn btn-primary' onclick='generateComplianceReport()'>Generate Report</button>\n" +
+"                <button class='btn btn-success' onclick='downloadComplianceReport()'>Download JSON</button>\n" +
+"            </div>\n" +
+"            <div id='complianceContent'>\n" +
+"                <div class='stat-card'>\n" +
+"                    <h3>Security Status</h3>\n" +
+"                    <div class='value' id='securityStatus'>-</div>\n" +
+"                    <div class='label'>Encryption & Authentication</div>\n" +
+"                </div>\n" +
+"                <div class='stat-card'>\n" +
+"                    <h3>Audit Coverage</h3>\n" +
+"                    <div class='value' id='auditCoverage'>-</div>\n" +
+"                    <div class='label'>Logged Events</div>\n" +
+"                </div>\n" +
+"                <div class='stat-card'>\n" +
+"                    <h3>Compliance Score</h3>\n" +
+"                    <div class='value' id='complianceScore'>-</div>\n" +
+"                    <div class='label'>GDPR & Security</div>\n" +
+"                </div>\n" +
+"                <div id='complianceReport'></div>\n" +
+"            </div>\n" +
 "        </div>\n" +
 "    </div>\n" +
 "    \n" +
@@ -883,9 +922,13 @@ public class AdminWebInterface {
 "    document.getElementById('pairsTab').classList.add('hidden');\n" +
 "    document.getElementById('clientsTab').classList.add('hidden');\n" +
 "    document.getElementById('logsTab').classList.add('hidden');\n" +
+"    document.getElementById('auditTab').classList.add('hidden');\n" +
+"    document.getElementById('complianceTab').classList.add('hidden');\n" +
 "    if (tab === 'pairs') { document.getElementById('pairsTab').classList.remove('hidden'); loadPairs(); }\n" +
 "    if (tab === 'clients') { document.getElementById('clientsTab').classList.remove('hidden'); loadClients(); }\n" +
 "    if (tab === 'logs') { document.getElementById('logsTab').classList.remove('hidden'); loadLogs(); }\n" +
+"    if (tab === 'audit') { document.getElementById('auditTab').classList.remove('hidden'); loadAuditLogs(); }\n" +
+"    if (tab === 'compliance') { document.getElementById('complianceTab').classList.remove('hidden'); generateComplianceReport(); }\n" +
 "}\n" +
 "\n" +
 "function filterLogs(btn) {\n" +
@@ -981,6 +1024,180 @@ public class AdminWebInterface {
 "    if (bytes < 1024*1024) return (bytes/1024).toFixed(1) + ' KB';\n" +
 "    if (bytes < 1024*1024*1024) return (bytes/1024/1024).toFixed(1) + ' MB';\n" +
 "    return (bytes/1024/1024/1024).toFixed(2) + ' GB';\n" +
+"}\n" +
+"\n" +
+"// Audit functions\n" +
+"let currentAuditUser = 'ALL';\n" +
+"let currentAuditAction = 'ALL';\n" +
+"\n" +
+"async function loadAuditLogs() {\n" +
+"    const search = document.getElementById('auditSearch').value;\n" +
+"    let url = '/admin/api/audit?';\n" +
+"    if (currentAuditUser !== 'ALL') url += 'user=' + currentAuditUser + '&';\n" +
+"    if (currentAuditAction !== 'ALL') url += 'action=' + currentAuditAction + '&';\n" +
+"    if (search) url += 'fileName=' + encodeURIComponent(search) + '&';\n" +
+"    \n" +
+"    try {\n" +
+"        const resp = await fetch(url);\n" +
+"        const data = await resp.json();\n" +
+"        if (data.success) {\n" +
+"            displayAuditLogs(data.auditLogs);\n" +
+"        } else {\n" +
+"            document.getElementById('auditList').innerHTML = '<div class=\"error-msg\">' + data.message + '</div>';\n" +
+"        }\n" +
+"    } catch(e) {\n" +
+"        document.getElementById('auditList').innerHTML = '<div class=\"error-msg\">Error loading audit logs: ' + e + '</div>';\n" +
+"    }\n" +
+"}\n" +
+"\n" +
+"function displayAuditLogs(logs) {\n" +
+"    const container = document.getElementById('auditList');\n" +
+"    if (logs.length === 0) {\n" +
+"        container.innerHTML = '<div class=\"loading\">No audit logs found</div>';\n" +
+"        return;\n" +
+"    }\n" +
+"    \n" +
+"    let html = '<div style=\"display: grid; gap: 10px;\">';\n" +
+"    logs.forEach(log => {\n" +
+"        const time = new Date(log.timestamp).toLocaleString();\n" +
+"        const status = log.success ? '✅' : '❌';\n" +
+"        html += `<div class=\"log-entry\" style=\"padding: 15px; border: 1px solid #e0e0e0; border-radius: 8px;\">`;\n" +
+"        html += `<div style=\"display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;\">`;\n" +
+"        html += `<strong>${log.action}</strong> <span>${status}</span>`;\n" +
+"        html += `</div>`;\n" +
+"        html += `<div style=\"font-size: 14px; color: #666; margin-bottom: 5px;\">User: ${log.user || 'N/A'} | Time: ${time}</div>`;\n" +
+"        if (log.fileName) html += `<div style=\"font-size: 14px; color: #333;\">File: ${log.fileName}</div>`;\n" +
+"        if (log.fileSize) html += `<div style=\"font-size: 14px; color: #333;\">Size: ${formatBytes(log.fileSize)}</div>`;\n" +
+"        if (log.ipAddress) html += `<div style=\"font-size: 14px; color: #333;\">IP: ${log.ipAddress}</div>`;\n" +
+"        html += `</div>`;\n" +
+"    });\n" +
+"    html += '</div>';\n" +
+"    container.innerHTML = html;\n" +
+"}\n" +
+"\n" +
+"function filterAuditLogs(btn) {\n" +
+"    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));\n" +
+"    btn.classList.add('active');\n" +
+"    \n" +
+"    if (btn.dataset.user) {\n" +
+"        currentAuditUser = btn.dataset.user;\n" +
+"    } else if (btn.dataset.action) {\n" +
+"        currentAuditAction = btn.dataset.action;\n" +
+"    }\n" +
+"    \n" +
+"    loadAuditLogs();\n" +
+"}\n" +
+"\n" +
+"async function exportAuditLogs() {\n" +
+"    try {\n" +
+"        const resp = await fetch('/admin/api/audit/export');\n" +
+"        if (resp.ok) {\n" +
+"            const blob = await resp.blob();\n" +
+"            const url = window.URL.createObjectURL(blob);\n" +
+"            const a = document.createElement('a');\n" +
+"            a.href = url;\n" +
+"            a.download = 'audit_logs.csv';\n" +
+"            document.body.appendChild(a);\n" +
+"            a.click();\n" +
+"            document.body.removeChild(a);\n" +
+"            window.URL.revokeObjectURL(url);\n" +
+"        } else {\n" +
+"            alert('Export failed');\n" +
+"        }\n" +
+"    } catch(e) {\n" +
+"        alert('Export error: ' + e);\n" +
+"    }\n" +
+"}\n" +
+"\n" +
+"// Compliance functions\n" +
+"async function generateComplianceReport() {\n" +
+"    try {\n" +
+"        const resp = await fetch('/admin/api/compliance/report?period=all');\n" +
+"        const data = await resp.json();\n" +
+"        if (data.success) {\n" +
+"            displayComplianceReport(data);\n" +
+"        } else {\n" +
+"            alert('Failed to generate report: ' + data.message);\n" +
+"        }\n" +
+"    } catch(e) {\n" +
+"        alert('Error generating report: ' + e);\n" +
+"    }\n" +
+"}\n" +
+"\n" +
+"function displayComplianceReport(report) {\n" +
+"    // Update status cards\n" +
+"    document.getElementById('securityStatus').textContent = 'AES-256-GCM';\n" +
+"    document.getElementById('auditCoverage').textContent = report.audit.totalAuditEntries + ' events';\n" +
+"    \n" +
+"    // Calculate compliance score\n" +
+"    let score = 0;\n" +
+"    if (report.security.endToEndEncryption) score += 25;\n" +
+"    if (report.audit.auditLoggingEnabled) score += 25;\n" +
+"    if (report.compliance.gdprCompliant) score += 25;\n" +
+"    if (report.compliance.encryptionInTransit) score += 25;\n" +
+"    document.getElementById('complianceScore').textContent = score + '%';\n" +
+"    \n" +
+"    // Display detailed report\n" +
+"    const container = document.getElementById('complianceReport');\n" +
+"    let html = '<div style=\"margin-top: 20px;\">';\n" +
+"    html += '<h3>Detailed Compliance Report</h3>';\n" +
+"    html += '<div style=\"display: grid; gap: 15px; margin-top: 15px;\">';\n" +
+"    \n" +
+"    // Security section\n" +
+"    html += '<div class=\"stat-card\">';\n" +
+"    html += '<h4>Security</h4>';\n" +
+"    html += '<ul style=\"margin: 10px 0; padding-left: 20px;\">';\n" +
+"    html += '<li>Encryption: ' + report.security.encryptionEnabled + '</li>';\n" +
+"    html += '<li>End-to-End: ' + (report.security.endToEndEncryption ? 'Enabled' : 'Disabled') + '</li>';\n" +
+"    html += '</ul>';\n" +
+"    html += '</div>';\n" +
+"    \n" +
+"    // Audit section\n" +
+"    html += '<div class=\"stat-card\">';\n" +
+"    html += '<h4>Audit & Logging</h4>';\n" +
+"    html += '<ul style=\"margin: 10px 0; padding-left: 20px;\">';\n" +
+"    html += '<li>Total Events: ' + report.audit.totalAuditEntries + '</li>';\n" +
+"    html += '<li>Logging: ' + (report.audit.auditLoggingEnabled ? 'Enabled' : 'Disabled') + '</li>';\n" +
+"    html += '<li>Export Available: ' + (report.audit.auditExportAvailable ? 'Yes' : 'No') + '</li>';\n" +
+"    html += '</ul>';\n" +
+"    html += '</div>';\n" +
+"    \n" +
+"    // Compliance section\n" +
+"    html += '<div class=\"stat-card\">';\n" +
+"    html += '<h4>GDPR Compliance</h4>';\n" +
+"    html += '<ul style=\"margin: 10px 0; padding-left: 20px;\">';\n" +
+"    html += '<li>GDPR Compliant: ' + (report.compliance.gdprCompliant ? 'Yes' : 'No') + '</li>';\n" +
+"    html += '<li>Data Minimization: ' + (report.compliance.dataMinimization ? 'Yes' : 'No') + '</li>';\n" +
+"    html += '<li>Right to Erasure: ' + (report.compliance.rightToErasure ? 'Yes' : 'No') + '</li>';\n" +
+"    html += '<li>Encryption in Transit: ' + (report.compliance.encryptionInTransit ? 'Yes' : 'No') + '</li>';\n" +
+"    html += '</ul>';\n" +
+"    html += '</div>';\n" +
+"    \n" +
+"    html += '</div>';\n" +
+"    html += '</div>';\n" +
+"    container.innerHTML = html;\n" +
+"}\n" +
+"\n" +
+"async function downloadComplianceReport() {\n" +
+"    try {\n" +
+"        const resp = await fetch('/admin/api/compliance/report?period=all');\n" +
+"        const data = await resp.json();\n" +
+"        if (data.success) {\n" +
+"            const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});\n" +
+"            const url = window.URL.createObjectURL(blob);\n" +
+"            const a = document.createElement('a');\n" +
+"            a.href = url;\n" +
+"            a.download = 'compliance_report.json';\n" +
+"            document.body.appendChild(a);\n" +
+"            a.click();\n" +
+"            document.body.removeChild(a);\n" +
+"            window.URL.revokeObjectURL(url);\n" +
+"        } else {\n" +
+"            alert('Failed to download report: ' + data.message);\n" +
+"        }\n" +
+"    } catch(e) {\n" +
+"        alert('Download error: ' + e);\n" +
+"    }\n" +
 "}\n" +
 "\n" +
 "document.getElementById('password').addEventListener('keypress', (e) => {\n" +
