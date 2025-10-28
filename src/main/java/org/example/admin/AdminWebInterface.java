@@ -62,7 +62,10 @@ public class AdminWebInterface {
      */
     private void handleApiRequest(ChannelHandlerContext ctx, FullHttpRequest req, String uri) {
         // Check session (except for login)
-        if (!uri.equals("/admin/api/login")) {
+        QueryStringDecoder uriDecoder = new QueryStringDecoder(uri);
+        String path = uriDecoder.path();
+
+        if (!path.equals("/admin/api/login")) {
             String sessionToken = getCookie(req, "admin_session");
             if (!AdminLogger.isValidSession(sessionToken)) {
                 sendJSONResponse(ctx, req, HttpResponseStatus.UNAUTHORIZED, 
@@ -72,7 +75,7 @@ public class AdminWebInterface {
         }
         
         try {
-            switch (uri) {
+            switch (path) {
                 case "/admin/api/login":
                     handleLogin(ctx, req);
                     break;
@@ -815,6 +818,7 @@ public class AdminWebInterface {
 "        if (data.success) {\n" +
 "            document.getElementById('loginScreen').classList.add('hidden');\n" +
 "            document.getElementById('adminPanel').classList.remove('hidden');\n" +
+"            showTabProgrammatically('logs');\n" +
 "            loadDashboard();\n" +
 "            refreshInterval = setInterval(loadStats, 5000);\n" +
 "        } else {\n" +
@@ -919,6 +923,26 @@ public class AdminWebInterface {
 "function showTab(tab) {\n" +
 "    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));\n" +
 "    event.target.classList.add('active');\n" +
+"    document.getElementById('pairsTab').classList.add('hidden');\n" +
+"    document.getElementById('clientsTab').classList.add('hidden');\n" +
+"    document.getElementById('logsTab').classList.add('hidden');\n" +
+"    document.getElementById('auditTab').classList.add('hidden');\n" +
+"    document.getElementById('complianceTab').classList.add('hidden');\n" +
+"    if (tab === 'pairs') { document.getElementById('pairsTab').classList.remove('hidden'); loadPairs(); }\n" +
+"    if (tab === 'clients') { document.getElementById('clientsTab').classList.remove('hidden'); loadClients(); }\n" +
+"    if (tab === 'logs') { document.getElementById('logsTab').classList.remove('hidden'); loadLogs(); }\n" +
+"    if (tab === 'audit') { document.getElementById('auditTab').classList.remove('hidden'); loadAuditLogs(); }\n" +
+"    if (tab === 'compliance') { document.getElementById('complianceTab').classList.remove('hidden'); generateComplianceReport(); }\n" +
+"}\n" +
+"\n" +
+"// Helper function to programmatically show tab (for login)\n" +
+"function showTabProgrammatically(tab) {\n" +
+"    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));\n" +
+"    document.querySelectorAll('.tab').forEach(t => {\n" +
+"        if (t.onclick && t.onclick.toString().includes(tab)) {\n" +
+"            t.classList.add('active');\n" +
+"        }\n" +
+"    });\n" +
 "    document.getElementById('pairsTab').classList.add('hidden');\n" +
 "    document.getElementById('clientsTab').classList.add('hidden');\n" +
 "    document.getElementById('logsTab').classList.add('hidden');\n" +
