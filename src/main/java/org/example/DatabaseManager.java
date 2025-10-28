@@ -53,28 +53,44 @@ public class DatabaseManager {
         isEnabled = true;
         
         try {
-            // Normalize JDBC URL
+            // Parse DATABASE_URL properly
             String jdbcUrl = DB_URL;
-            if (!jdbcUrl.startsWith("jdbc:")) {
-                // Accept forms like postgresql://user:pass@host:port/db
-                if (jdbcUrl.startsWith("postgresql://") || jdbcUrl.startsWith("postgres://")) {
-                    jdbcUrl = "jdbc:" + jdbcUrl.replaceFirst("^postgres://", "postgresql://");
-                } else {
-                    jdbcUrl = "jdbc:" + jdbcUrl;
+            String username = DB_USER;
+            String password = DB_PASSWORD;
+            
+            // If DATABASE_URL contains credentials, parse them
+            if (jdbcUrl.contains("@")) {
+                try {
+                    java.net.URI uri = new java.net.URI(jdbcUrl.replaceFirst("^postgresql://", "postgresql://"));
+                    if (uri.getUserInfo() != null) {
+                        String[] userInfo = uri.getUserInfo().split(":");
+                        username = userInfo[0];
+                        password = userInfo.length > 1 ? userInfo[1] : "";
+                    }
+                    // Reconstruct URL without credentials for JDBC
+                    String host = uri.getHost();
+                    int port = uri.getPort() > 0 ? uri.getPort() : 5432;
+                    String path = uri.getPath();
+                    jdbcUrl = "jdbc:postgresql://" + host + ":" + port + path;
+                } catch (Exception e) {
+                    AdminLogger.warn(TAG, "Failed to parse DATABASE_URL, using as-is: " + e.getMessage());
                 }
             }
-            // Ensure default sslmode=require for managed providers (Render, etc.)
+            
+            // Ensure default sslmode=require for managed providers
             if (!jdbcUrl.contains("sslmode=")) {
                 jdbcUrl = jdbcUrl.contains("?") ? (jdbcUrl + "&sslmode=require") : (jdbcUrl + "?sslmode=require");
             }
-            AdminLogger.info(TAG, "Normalized JDBC URL: " + jdbcUrl.replaceAll(":[^:@]*@", ":***@"));
+            
+            AdminLogger.info(TAG, "Final JDBC URL: " + jdbcUrl.replaceAll(":[^:@]*@", ":***@"));
+            AdminLogger.info(TAG, "Username: " + username);
+            AdminLogger.info(TAG, "Password: " + (password.isEmpty() ? "empty" : "***"));
 
             HikariConfig config = new HikariConfig();
             config.setJdbcUrl(jdbcUrl);
-            // Explicit driver (helps avoid "No suitable driver")
             config.setDriverClassName("org.postgresql.Driver");
-            config.setUsername(DB_USER);
-            config.setPassword(DB_PASSWORD);
+            config.setUsername(username);
+            config.setPassword(password);
             config.setMaximumPoolSize(10);
             config.setMinimumIdle(2);
             config.setConnectionTimeout(30000);
