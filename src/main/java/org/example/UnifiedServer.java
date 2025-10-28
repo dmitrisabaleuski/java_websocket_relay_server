@@ -54,6 +54,13 @@ public class UnifiedServer {
     // PING/PONG heartbeat system
     private static final java.util.Timer heartbeatTimer = new java.util.Timer(true);
     private static final long HEARTBEAT_INTERVAL = 30000; // 30 seconds
+    
+    /**
+     * Get clients map for admin interface
+     */
+    public static Map<String, Channel> getClients() {
+        return clients;
+    }
 
     public static void main(String[] args) throws Exception {
         int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "8080"));

@@ -455,8 +455,8 @@ public class AdminWebInterface {
         // Get audit logs count
         int auditLogsCount = org.example.AuditLogger.getAuditLogsCount();
         
-        // Get active pairs
-        int activePairs = org.example.admin.PairManager.getActivePairsCount();
+        // Get active pairs (pass clients map)
+        int activePairs = org.example.admin.PairManager.getActivePairsCount(clients);
         
         // Build compliance report
         JSONObject report = new JSONObject();
