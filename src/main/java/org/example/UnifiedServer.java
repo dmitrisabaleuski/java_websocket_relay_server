@@ -16,6 +16,8 @@ import io.netty.util.CharsetUtil;
 import org.json.JSONObject;
 import org.example.admin.AdminWebInterface;
 import org.example.admin.PairManager;
+import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
 
 import java.io.*;
 import io.netty.channel.Channel;
@@ -897,68 +899,73 @@ public class UnifiedServer {
             System.out.println("[SERVER] BinaryWebSocketFrame received. Total size: " + frame.content().readableBytes());
             ByteBuf buffer = frame.content();
             buffer = buffer.retainedDuplicate();
-            byte[] prefixBytes = new byte[64];
-            buffer.readBytes(prefixBytes);
-            String prefix = new String(prefixBytes, StandardCharsets.UTF_8).trim();
+            
+            try {
+                byte[] prefixBytes = new byte[64];
+                buffer.readBytes(prefixBytes);
+                String prefix = new String(prefixBytes, StandardCharsets.UTF_8).trim();
 
-            if (prefix.startsWith("FILE_DATA:")) {
-                String transferId = prefix.substring("FILE_DATA:".length()).trim();
-                System.out.println("[FILE_DATA]: transferId= " + transferId);
-                int dataLen = buffer.readableBytes();
-                byte[] chunk = new byte[dataLen];
-                buffer.readBytes(chunk);
+                if (prefix.startsWith("FILE_DATA:")) {
+                    String transferId = prefix.substring("FILE_DATA:".length()).trim();
+                    System.out.println("[FILE_DATA]: transferId= " + transferId);
+                    int dataLen = buffer.readableBytes();
+                    byte[] chunk = new byte[dataLen];
+                    buffer.readBytes(chunk);
 
-                OutputStream fos = activeFileStreams.get(transferId);
-                System.out.println("[FILE_DATA]: fos= " + fos);
-                if (fos != null) {
-                    try {
-                        fos.write(chunk);
-                        long totalReceived = fileTransferSize.getOrDefault(transferId, 0L) + chunk.length;
-                        fileTransferSize.put(transferId, totalReceived);
+                    OutputStream fos = activeFileStreams.get(transferId);
+                    System.out.println("[FILE_DATA]: fos= " + fos);
+                    if (fos != null) {
+                        try {
+                            fos.write(chunk);
+                            long totalReceived = fileTransferSize.getOrDefault(transferId, 0L) + chunk.length;
+                            fileTransferSize.put(transferId, totalReceived);
 
-                        System.out.println("[TRANSFER] FILE_DATA: transferId=" + transferId +
-                                ", chunkSize=" + chunk.length + ", totalReceived=" + totalReceived);
+                            System.out.println("[TRANSFER] FILE_DATA: transferId=" + transferId +
+                                    ", chunkSize=" + chunk.length + ", totalReceived=" + totalReceived);
 
-                    } catch (IOException e) {
+                        } catch (IOException e) {
 
-                        System.err.println("[TRANSFER] File write error: " + e.getMessage());
+                            System.err.println("[TRANSFER] File write error: " + e.getMessage());
+
+                        }
+                    } else {
+
+                        System.err.println("[TRANSFER] No file stream for transferId " + transferId);
 
                     }
+
+                    String senderToken = userId;
+                    String targetToken = tokenPairs.get(senderToken);
+                    if (targetToken == null) {
+                        System.err.println("[TRANSFER] Target token not found for FILE_DATA. senderToken=" + senderToken);
+                        ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target not connected"));
+                        return;
+                    }
+                    
+                    Channel target = clients.get(targetToken);
+                    if (target == null || !target.isActive()) {
+                        System.err.println("[TRANSFER] Target client not connected for FILE_DATA. targetToken=" + targetToken);
+                        ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target client not connected"));
+                        return;
+                    }
+                    
+                    // Forward binary data to target (already validated above)
+                    ByteBuf toSend = Unpooled.buffer(prefixBytes.length + chunk.length);
+                    toSend.writeBytes(prefixBytes);
+                    toSend.writeBytes(chunk);
+                    target.writeAndFlush(new BinaryWebSocketFrame(toSend));
+
+                    System.out.println("[TRANSFER] Forwarded FILE_DATA chunk to target: " + targetToken +
+                            ", transferId=" + transferId + ", chunkSize=" + chunk.length);
                 } else {
 
-                    System.err.println("[TRANSFER] No file stream for transferId " + transferId);
+                    System.err.println("[SERVER] Unknown binary prefix received: " + prefix);
 
                 }
-
-                String senderToken = userId;
-                String targetToken = tokenPairs.get(senderToken);
-                if (targetToken == null) {
-                    System.err.println("[TRANSFER] Target token not found for FILE_DATA. senderToken=" + senderToken);
-                    ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target not connected"));
-                    return;
-                }
-                
-                Channel target = clients.get(targetToken);
-                if (target == null || !target.isActive()) {
-                    System.err.println("[TRANSFER] Target client not connected for FILE_DATA. targetToken=" + targetToken);
-                    ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Target client not connected"));
-                    return;
-                }
-                
-                // Forward binary data to target (already validated above)
-                ByteBuf toSend = Unpooled.buffer(prefixBytes.length + chunk.length);
-                toSend.writeBytes(prefixBytes);
-                toSend.writeBytes(chunk);
-                target.writeAndFlush(new BinaryWebSocketFrame(toSend));
-
-                System.out.println("[TRANSFER] Forwarded FILE_DATA chunk to target: " + targetToken +
-                        ", transferId=" + transferId + ", chunkSize=" + chunk.length);
-            } else {
-
-                System.err.println("[SERVER] Unknown binary prefix received: " + prefix);
-
+            } finally {
+                // Always release buffer to prevent memory leaks
+                buffer.release();
             }
-            buffer.release();
         }
 
         private String getUserIdFromToken(String jwtToken) {
@@ -1060,7 +1067,7 @@ public class UnifiedServer {
         private static void savePairings() {
             try {
                 File file = new File("pairings.json");
-                com.google.gson.Gson gson = new com.google.gson.Gson();
+                Gson gson = new Gson();
                 String json = gson.toJson(tokenPairs);
                 
                 try (java.io.FileWriter writer = new java.io.FileWriter(file)) {
@@ -1085,9 +1092,9 @@ public class UnifiedServer {
                     return;
                 }
                 
-                com.google.gson.Gson gson = new com.google.gson.Gson();
+                Gson gson = new Gson();
                 java.io.FileReader reader = new java.io.FileReader(file);
-                java.lang.reflect.Type type = new com.google.gson.reflect.TypeToken<java.util.Map<String, String>>(){}.getType();
+                java.lang.reflect.Type type = new TypeToken<java.util.Map<String, String>>(){}.getType();
                 Map<String, String> loaded = gson.fromJson(reader, type);
                 reader.close();
                 
