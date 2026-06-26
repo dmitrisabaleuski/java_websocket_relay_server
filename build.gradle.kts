@@ -18,6 +18,9 @@ dependencies {
     
     // Connection Pooling (HikariCP - fast and lightweight)
     implementation("com.zaxxer:HikariCP:5.0.1")
+    
+    // AWS SDK for S3 and S3 Presigner
+    implementation("software.amazon.awssdk:s3:2.25.15")
 }
 
 tasks {

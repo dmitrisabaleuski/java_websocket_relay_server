@@ -66,8 +66,9 @@ public class UnifiedServer {
 
     public static void main(String[] args) throws Exception {
         int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "8080"));
-        File uploads = new File(UPLOADS_DIR);
-        if (!uploads.exists()) uploads.mkdirs();
+        // Initialize S3 manager
+        S3Manager.initialize();
+        AdminLogger.info("SERVER", "S3 Manager initialized");
         
         // Initialize database connection
         DatabaseManager.initialize();
@@ -411,31 +412,101 @@ public class UnifiedServer {
                 return;
             }
 
-            if (message.startsWith("FILE_INFO:")) {
-                // Count active transfers for this user
-                long userActiveTransfers = transferOwners.values().stream()
-                    .filter(owner -> owner.equals(senderToken))
-                    .count();
-                
-                // Check global limit
-                if (activeFileStreams.size() >= MAX_ACTIVE_TRANSFERS) {
-                    System.err.println("[TRANSFER] ❌ BUSY:MAX_TRANSFERS (global limit) for sender=" + senderToken);
-                    System.err.println("[TRANSFER] Active transfers list:");
-                    for (Map.Entry<String, String> entry : transferOwners.entrySet()) {
-                        System.err.println("  - transferId=" + entry.getKey() + ", owner=" + entry.getValue() + 
-                                         ", fileName=" + activeFileNames.get(entry.getKey()));
+            if (message.startsWith("REQUEST_UPLOAD:")) {
+                String[] parts = message.split(":", 4);
+                if (parts.length >= 4) {
+                    String transferId = parts[1];
+                    String filename = parts[2];
+                    String size = parts[3];
+
+                    // Validate filename to prevent path traversal
+                    if (filename == null || filename.isEmpty() || filename.contains("..") || filename.contains("/") || filename.contains("\\")) {
+                        ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Invalid filename"));
+                        return;
                     }
 
-                    ctx.channel().writeAndFlush(new TextWebSocketFrame("BUSY:MAX_TRANSFERS"));
-                    return;
+                    // Sanitize filename
+                    String safeFilename = filename.replaceAll("[^a-zA-Z0-9._-]", "_");
+                    
+                    // Validate size
+                    long expectedSize;
+                    try {
+                        expectedSize = Long.parseLong(size);
+                    } catch (NumberFormatException e) {
+                        ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Invalid file size"));
+                        return;
+                    }
+                    if (expectedSize <= 0 || expectedSize > MAX_FILE_SIZE) {
+                        ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:File size limit exceeded"));
+                        return;
+                    }
+
+                    // Generate presigned PUT URL
+                    String objectKey = "user_" + senderToken + "/" + safeFilename;
+                    String presignedUrl = S3Manager.generatePresignedPutUrl(objectKey);
+                    
+                    if (presignedUrl != null) {
+                        ctx.channel().writeAndFlush(new TextWebSocketFrame("UPLOAD_READY:" + transferId + ":" + presignedUrl));
+                        AdminLogger.info("S3", "Generated upload URL for " + objectKey + " (size: " + expectedSize + ")");
+                    } else {
+                        ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Failed to generate upload URL"));
+                    }
                 }
-                
-                // Check per-user limit for fairness
-                if (userActiveTransfers >= MAX_TRANSFERS_PER_USER) {
-                    System.err.println("[TRANSFER] ❌ BUSY:MAX_TRANSFERS (per-user limit " + MAX_TRANSFERS_PER_USER + ") for sender=" + senderToken);
-                    ctx.channel().writeAndFlush(new TextWebSocketFrame("BUSY:MAX_TRANSFERS"));
-                    return;
+                return;
+            }
+
+            if (message.startsWith("REQUEST_DOWNLOAD:")) {
+                String[] parts = message.split(":", 3);
+                if (parts.length >= 3) {
+                    String transferId = parts[1];
+                    String filename = parts[2];
+                    
+                    String pairedAndroidUserId = tokenPairs.get(senderToken);
+                    if (pairedAndroidUserId == null) {
+                        ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Not paired"));
+                        return;
+                    }
+
+                    // Generate presigned GET URL
+                    String objectKey = "user_" + pairedAndroidUserId + "/" + filename;
+                    String presignedUrl = S3Manager.generatePresignedGetUrl(objectKey);
+                    
+                    if (presignedUrl != null) {
+                        ctx.channel().writeAndFlush(new TextWebSocketFrame("DOWNLOAD_READY:" + transferId + ":" + filename + ":" + presignedUrl));
+                        AdminLogger.info("S3", "Generated download URL for " + objectKey);
+                    } else {
+                        ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Failed to generate download URL"));
+                    }
                 }
+                return;
+            }
+
+            if (message.startsWith("CONFIRM_DOWNLOAD:")) {
+                String[] parts = message.split(":", 3);
+                if (parts.length >= 3) {
+                    String transferId = parts[1];
+                    String filename = parts[2];
+                    
+                    String pairedAndroidUserId = tokenPairs.get(senderToken);
+                    if (pairedAndroidUserId != null) {
+                        String objectKey = "user_" + pairedAndroidUserId + "/" + filename;
+                        
+                        // Delete object from S3
+                        S3Manager.deleteObject(objectKey);
+                        
+                        // Notify Android client that file was received
+                        Channel androidCh = clients.get(pairedAndroidUserId);
+                        if (androidCh != null && androidCh.isActive()) {
+                            androidCh.writeAndFlush(new TextWebSocketFrame("FILE_RECEIVED:" + transferId));
+                            androidCh.writeAndFlush(new TextWebSocketFrame("SLOT_FREE"));
+                        }
+                        AdminLogger.info("S3", "File downloaded and deleted from S3: " + objectKey);
+                    }
+                }
+                return;
+            }
+
+            if (message.startsWith("FILE_INFO:")) {
                 String[] parts = message.split(":", 6);
                 if (parts.length >= 5) {
                     String transferId = parts[1];
@@ -444,53 +515,15 @@ public class UnifiedServer {
                     String previewUri = parts.length > 5 ? parts[5] : null;
 
                     // SECURITY: Validate filename to prevent path traversal attacks
-                    if (filename == null || filename.isEmpty()) {
-                        AdminLogger.security("VALIDATION", "Empty filename rejected from user: " + senderToken);
+                    if (filename == null || filename.isEmpty() || filename.contains("..") || filename.contains("/") || filename.contains("\\")) {
                         ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Invalid filename"));
-                        return;
-                    }
-                    
-                    if (filename.contains("..") || filename.contains("/") || filename.contains("\\")) {
-                        AdminLogger.security("VALIDATION", "Path traversal attempt blocked: " + filename + " from user: " + senderToken);
-                        ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Invalid filename - path traversal"));
                         return;
                     }
                     
                     // Sanitize filename - only allow safe characters
                     String safeFilename = filename.replaceAll("[^a-zA-Z0-9._-]", "_");
-                    if (!safeFilename.equals(filename)) {
-                        AdminLogger.security("VALIDATION", "Filename sanitized: " + filename + " -> " + safeFilename);
-                        filename = safeFilename;
-                    }
 
-                    // SECURITY: Validate file size
-                    long expectedSize;
-                    try {
-                        expectedSize = Long.parseLong(size);
-                    } catch (NumberFormatException e) {
-                        AdminLogger.security("VALIDATION", "Invalid file size format: " + size + " from user: " + senderToken);
-                        ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Invalid file size"));
-                        return;
-                    }
-                    
-                    if (expectedSize <= 0) {
-                        AdminLogger.security("VALIDATION", "Invalid file size: " + expectedSize + " bytes from user: " + senderToken);
-                        ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:File size must be positive"));
-                        return;
-                    }
-                    
-                    if (expectedSize > MAX_FILE_SIZE) {
-                        AdminLogger.security("VALIDATION", "File too large rejected: " + expectedSize + " bytes (max: " + MAX_FILE_SIZE + ") from user: " + senderToken);
-                        ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:File too large (max " + (MAX_FILE_SIZE / 1024 / 1024) + "MB)"));
-                        return;
-                    }
-
-                    fileTransferSize.put(transferId, 0L);
-                    fileExpectedSize.put(transferId, expectedSize);
-
-                    System.out.println("[TRANSFER] Starting transfer: " + filename + " (size=" + expectedSize + " bytes)");
-
-                    // Check target BEFORE opening file stream to avoid leaks
+                    // Check target
                     String targetToken = tokenPairs.get(senderToken);
                     if (targetToken == null) {
                         System.err.println("[SERVER] Target token not found for senderToken: " + senderToken);
@@ -505,37 +538,11 @@ public class UnifiedServer {
                         return;
                     }
 
-                    try {
-                        File uploadsDir = new File(UPLOADS_DIR);
-                        if (!uploadsDir.exists()) uploadsDir.mkdirs();
-                        OutputStream fos = new FileOutputStream(new File(uploadsDir, filename));
-                        activeFileStreams.put(transferId, fos);
-                        activeFileNames.put(transferId, filename);
-                        transferOwners.put(transferId, senderToken); // Track who owns this transfer
-                        
-                        // AUDIT: Log file transfer start
-                        String clientIP = ctx.channel().remoteAddress().toString().split(":")[0];
-                        AuditLogger.logFileSent(senderToken, filename, expectedSize, "PC", clientIP, true);
-                        
-                    } catch (Exception e) {
-
-                        System.err.println("[TRANSFER] Failed to open file stream: " + e.getMessage());
-                        
-                        // AUDIT: Log failure
-                        String clientIP = ctx.channel().remoteAddress().toString().split(":")[0];
-                        AuditLogger.logFileSent(senderToken, filename, expectedSize, "PC", clientIP, false);
-                        
-                        ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Failed to open file stream"));
-                        return;
-
-                    }
-
+                    // Forward FILE_INFO to PC
                     target.writeAndFlush(new TextWebSocketFrame(message));
-                    ctx.channel().writeAndFlush(new TextWebSocketFrame("OK:READY:" + transferId));
+                    System.out.println("[SERVER] Forwarded FILE_INFO for " + safeFilename + " to PC client: " + targetToken);
                 } else {
-
                     System.err.println("[TRANSFER] Invalid FILE_INFO format: " + message);
-
                     ctx.channel().writeAndFlush(new TextWebSocketFrame("ERROR:Invalid FILE_INFO format"));
                 }
 
@@ -667,6 +674,9 @@ public class UnifiedServer {
                     
                     // Unregister from PairManager
                     PairManager.unregisterPair(senderToken, pairToken);
+                    
+                    // Save pairings (to file if db is disabled)
+                    savePairings();
                     
                     Channel pairCh = clients.get(pairToken);
                     if (pairCh != null) {
@@ -1065,6 +1075,10 @@ public class UnifiedServer {
          * Save pairings to file for persistence across server restarts
          */
         private static void savePairings() {
+            if (DatabaseManager.isEnabled()) {
+                AdminLogger.info("PERSISTENCE", "Database is enabled, skipping save to pairings.json");
+                return;
+            }
             try {
                 File file = new File("pairings.json");
                 Gson gson = new Gson();
@@ -1085,6 +1099,10 @@ public class UnifiedServer {
          * Load pairings from file on server startup
          */
         private static void loadPairings() {
+            if (DatabaseManager.isEnabled()) {
+                AdminLogger.info("PERSISTENCE", "Database is enabled, skipping load from pairings.json");
+                return;
+            }
             try {
                 File file = new File("pairings.json");
                 if (!file.exists()) {
